@@ -1,0 +1,12 @@
+# Python 运行缓存
+__pycache__/
+*.py[cod]
+
+# Node.js / NestJS 依赖与构建产物
+node_modules/
+dist/
+coverage/
+
+# 本地环境与日志
+.env
+*.log
