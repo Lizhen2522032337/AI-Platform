@@ -1,2 +1,3 @@
 # 部署环境变量包含数据库凭据，禁止提交到 Git。
 deploy/.env
+deploy/.state/

@@ -13,8 +13,15 @@ enterprise-ai-platform/
 │   └── nest-service/
 ├── deploy/
 │   ├── docker-compose.yml
-│   └── nginx/
-│       └── nginx.conf
+│   ├── nginx/
+│   │   └── nginx.conf
+│   └── scripts/
+│       ├── first-deploy.sh
+│       ├── pull-code.sh
+│       └── update-*.sh
+├── database/
+│   └── migrations/
+├── docs/
 └── README.md
 ```
 
@@ -86,29 +93,24 @@ docker compose -f deploy/docker-compose.yml down
 
 ## 手动部署到虚拟机
 
-生产虚拟机地址为 `192.168.86.133`。部署前请在虚拟机上安装 Docker Engine、Docker Compose 插件和 `tar`，并准备一个能够通过 SSH 登录且有权运行 Docker 的账号。
+推荐使用仓库内的独立 Linux 脚本完成首次部署、单服务更新、验收和回滚，完整说明见 [`docs/deployment-scripts.md`](docs/deployment-scripts.md)。
 
-在本地项目根目录生成只包含 Git 已跟踪文件的部署包：
+脚本化首次部署（PR 合并后）：
 
 ```bash
-git archive --format=tar.gz --output=enterprise-ai-platform.tar.gz HEAD
+curl -fsSL \
+  https://raw.githubusercontent.com/Lizhen2522032337/AI-Platform/master/deploy/scripts/bootstrap-deploy.sh \
+  -o /tmp/bootstrap-deploy.sh
+chmod +x /tmp/bootstrap-deploy.sh
+/tmp/bootstrap-deploy.sh master
 ```
 
-将 `<vm-user>` 替换为虚拟机登录用户名，然后上传部署包：
+日常更新时先拉取代码，再根据变更范围选择对应脚本：
 
 ```bash
-scp enterprise-ai-platform.tar.gz <vm-user>@192.168.86.133:/tmp/
-```
-
-登录虚拟机并部署：
-
-```bash
-ssh <vm-user>@192.168.86.133
-sudo mkdir -p /opt/enterprise-ai-platform
-sudo tar -xzf /tmp/enterprise-ai-platform.tar.gz -C /opt/enterprise-ai-platform
 cd /opt/enterprise-ai-platform
-docker compose -f deploy/docker-compose.yml up -d --build --remove-orphans
-docker compose -f deploy/docker-compose.yml ps
+./deploy/scripts/pull-code.sh master
+./deploy/scripts/update-frontend.sh
 ```
 
-后续更新时，重新生成并上传部署包，再执行相同的解压和 Compose 命令即可。
+上例只更新前端。FastAPI、Gin、NestJS、Nginx、多服务、全量更新和回滚命令见完整脚本文档。
