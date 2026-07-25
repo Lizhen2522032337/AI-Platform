@@ -7,6 +7,7 @@ readonly REPOSITORY_URL="${REPOSITORY_URL:-https://github.com/Lizhen2522032337/A
 readonly DEPLOY_DIR="${DEPLOY_DIR:-/opt/enterprise-ai-platform}"
 readonly CONFIG_DIR="${CONFIG_DIR:-/etc/enterprise-ai-platform}"
 readonly BRANCH="${1:-${DEPLOY_BRANCH:-agent/initial-project}}"
+readonly DATABASE_CONFIG="${DATABASE_ENV_FILE:-${CONFIG_DIR}/database.env}"
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -35,10 +36,16 @@ else
     sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "${CONFIG_DIR}"
 fi
 
+# 数据库容器和连接文件由用户独立准备；首次应用部署不创建或修改数据库。
+[[ -f "${DATABASE_CONFIG}" ]] \
+    || die "找不到 ${DATABASE_CONFIG}；请先按部署手册准备数据库连接文件"
+[[ -r "${DATABASE_CONFIG}" ]] \
+    || die "当前用户无法读取 ${DATABASE_CONFIG}"
+
 umask 077
 {
     printf 'DEPLOY_BRANCH=%q\n' "${BRANCH}"
-    printf 'DATABASE_ENV_FILE=%q\n' "${CONFIG_DIR}/database.env"
+    printf 'DATABASE_ENV_FILE=%q\n' "${DATABASE_CONFIG}"
 } >"${CONFIG_DIR}/deploy.env"
 
 log "克隆 ${BRANCH} 到 ${DEPLOY_DIR}"

@@ -14,7 +14,8 @@ React 前端与 FastAPI、Gin、NestJS 三套后端组成的容器化项目。�
 - Windows 家庭版宿主机不运行 Docker。
 - Docker 构建和运行全部在 Linux 虚拟机 `192.168.86.133` 完成。
 - 应用代码由虚拟机直接从 GitHub 拉取。
-- 数据库真实配置保存在仓库外的 `/etc/enterprise-ai-platform/database.env`。
+- 数据库容器由新环境独立管理；应用脚本不会在首次部署时创建或迁移数据库。
+- 数据库真实连接配置保存在仓库外的 `/etc/enterprise-ai-platform/database.env`。
 
 首次完整部署、四个组件的独立更新、更换数据库、验收和回滚命令见 [`docs/deployment-scripts.md`](docs/deployment-scripts.md)。
 

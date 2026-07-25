@@ -60,22 +60,34 @@ docker compose version
 docker run --rm hello-world
 ```
 
-### 2.3 准备 PostgreSQL
+### 2.3 准备数据库连接文件
 
-数据库可以在虚拟机宿主机、其他虚拟机、云数据库或数据库容器中，但必须先满足：
+数据库已经由新环境中的独立 Docker 容器提供。应用首次部署脚本不会创建、启动、修改或迁移数据库。执行应用部署前，请确认：
 
-1. 目标数据库已创建。
-2. 数据库用户拥有目标库建表、建索引和 CRUD 权限。
-3. 数据库允许来自 Docker 网络的 TCP 连接。
-4. 防火墙只对实际需要的来源开放 `5432/tcp`。
+1. 数据库容器已经运行，并通过主机端口或可达的 Docker 网络提供连接。
+2. 目标数据库、用户、权限和 `platform_items` 表结构已经准备完成。
+3. `/etc/enterprise-ai-platform/database.env` 已保存正确连接参数。
 
-当前数据库若运行在同一台虚拟机宿主机，配置中的地址使用 `host.docker.internal`。PostgreSQL 需要监听 Docker 可达地址，并在 `pg_hba.conf` 中允许实际 Docker 网段。例如当前默认库和用户均为 `postgres` 时，可使用：
+在虚拟机执行：
 
-```text
-host    enterprise_ai_platform    postgres    172.16.0.0/12    scram-sha-256
+```bash
+sudo install -d -m 700 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
+install -m 600 /dev/null /etc/enterprise-ai-platform/database.env
+vi /etc/enterprise-ai-platform/database.env
 ```
 
-这是宽泛的 Docker 私网范围；生产环境应先用 `docker network inspect` 确认实际子网，再缩小规则。
+连接文件示例：
+
+```dotenv
+POSTGRES_HOST=host.docker.internal
+POSTGRES_PORT=5432
+POSTGRES_DB=enterprise_ai_platform
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<实际密码>
+POSTGRES_SSLMODE=disable
+```
+
+若数据库容器与应用容器不在同一个 Compose 网络中，最简单的方式是把数据库端口发布到虚拟机，并使用 `host.docker.internal` 连接。真实密码不得提交 Git。
 
 ## 3. 第一次完整部署
 
@@ -94,28 +106,11 @@ chmod +x /tmp/bootstrap-deploy.sh
 1. 创建 `/opt/enterprise-ai-platform`。
 2. 创建仓库外配置目录 `/etc/enterprise-ai-platform`。
 3. 克隆指定 Git 分支。
-4. 交互式读取数据库地址、端口、库名、用户、密码和 SSL 模式。
-5. 生成权限为 `600` 的 `/etc/enterprise-ai-platform/database.env`。
-6. 使用临时 `postgres:16-alpine` 容器执行 `database/migrations/*.sql`。
-7. 构建前端、三套后端和 Nginx 所需镜像。
-8. 启动容器并验收页面、健康接口和查询接口。
+4. 检查现有 `/etc/enterprise-ai-platform/database.env` 是否可读，但不修改它。
+5. 构建前端、三套后端和 Nginx 所需镜像。
+6. 启动应用容器并验收页面、健康接口和查询接口。
 
-数据库配置格式如下，真实文件绝不能提交 Git：
-
-```dotenv
-POSTGRES_HOST=host.docker.internal
-POSTGRES_PORT=5432
-POSTGRES_DB=enterprise_ai_platform
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=<实际密码>
-POSTGRES_SSLMODE=disable
-```
-
-非交互部署时，可以预先通过环境变量提供密码和其他数据库参数：
-
-```bash
-POSTGRES_PASSWORD='<实际密码>' /tmp/bootstrap-deploy.sh agent/initial-project
-```
+首次部署不会运行 `database/migrations/*.sql`。数据库结构必须在执行本节命令前准备完成。
 
 首次部署完成后检查：
 

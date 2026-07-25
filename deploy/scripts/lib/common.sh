@@ -62,9 +62,9 @@ ensure_docker_compose() {
 
 ensure_database_env() {
     [[ -f "${DATABASE_ENV_FILE}" ]] \
-        || die "找不到独立数据库配置：${DATABASE_ENV_FILE}；请先执行 first-deploy.sh 或按模板创建"
-    chmod 600 "${DATABASE_ENV_FILE}" 2>/dev/null \
-        || warn "无法把 ${DATABASE_ENV_FILE} 权限改为 600，请检查文件所有者"
+        || die "找不到独立数据库连接配置：${DATABASE_ENV_FILE}；请在部署应用前准备好该文件"
+    [[ -r "${DATABASE_ENV_FILE}" ]] \
+        || die "当前用户无法读取数据库连接配置：${DATABASE_ENV_FILE}"
 }
 
 compose() {
