@@ -1,6 +1,9 @@
 # Python 运行缓存
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+.pytest_cache/
 
 # Node.js / NestJS 依赖与构建产物
 node_modules/

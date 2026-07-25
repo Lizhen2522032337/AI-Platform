@@ -1,121 +1,196 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ApiError, BACKENDS, itemsApi } from './api/items'
+import { BackendSelector } from './components/BackendSelector'
+import { ItemForm } from './components/ItemForm'
+import { ItemTable } from './components/ItemTable'
+import type { BackendKey, Item, ItemPayload } from './types/item'
 import './App.css'
 
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return `${error.message}（${error.code}）`
+  }
+  return error instanceof Error ? error.message : '发生未知错误。'
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [backend, setBackend] = useState<BackendKey>('fastapi')
+  const [items, setItems] = useState<Item[]>([])
+  const [editingItem, setEditingItem] = useState<Item | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  const selectedBackend = useMemo(
+    () => BACKENDS.find((option) => option.key === backend) ?? BACKENDS[0],
+    [backend],
+  )
+
+  const loadItems = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setItems(await itemsApi.list(backend))
+    } catch (requestError) {
+      setItems([])
+      setError(errorMessage(requestError))
+    } finally {
+      setLoading(false)
+    }
+  }, [backend])
+
+  useEffect(() => {
+    let active = true
+    itemsApi
+      .list(backend)
+      .then((result) => {
+        if (active) {
+          setItems(result)
+          setError('')
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (active) {
+          setItems([])
+          setError(errorMessage(requestError))
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [backend])
+
+  function changeBackend(nextBackend: BackendKey) {
+    setEditingItem(null)
+    setLoading(true)
+    setError('')
+    setBackend(nextBackend)
+  }
+
+  async function saveItem(payload: ItemPayload) {
+    setSubmitting(true)
+    setError('')
+    try {
+      if (editingItem) {
+        await itemsApi.update(backend, editingItem.id, payload)
+      } else {
+        await itemsApi.create(backend, payload)
+      }
+      setEditingItem(null)
+      await loadItems()
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function deleteItem(item: Item) {
+    if (!window.confirm(`确认删除“${item.name}”吗？此操作不可撤销。`)) {
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      await itemsApi.remove(backend, item.id)
+      if (editingItem?.id === item.id) {
+        setEditingItem(null)
+      }
+      await loadItems()
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
+    <main className="app-shell">
+      <header className="hero-panel">
         <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
+          <p className="eyebrow">ENTERPRISE AI PLATFORM</p>
+          <h1>多后端 CRUD 控制台</h1>
+          <p className="hero-copy">
+            使用同一个管理界面验证 FastAPI、Gin 和 NestJS 对共享 PostgreSQL
+            数据的读写能力。
           </p>
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+        <div className="status-chip">
+          <span className="status-dot" />
+          当前后端：{selectedBackend.label}
+        </div>
+      </header>
+
+      <section className="panel backend-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">BACKEND ROUTER</p>
+            <h2>选择请求后端</h2>
+          </div>
+          <code>{selectedBackend.baseUrl}</code>
+        </div>
+        <BackendSelector
+          disabled={loading || submitting}
+          onChange={changeBackend}
+          value={backend}
+        />
       </section>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      {error && (
+        <div className="error-banner" role="alert">
+          <strong>请求失败</strong>
+          <span>{error}</span>
+          <button className="button small" onClick={() => void loadItems()}>
+            重试
+          </button>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      )}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <div className="workspace-grid">
+        <section className="panel">
+          <ItemForm
+            editingItem={editingItem}
+            key={`${backend}-${editingItem?.id ?? 'new'}`}
+            onCancel={() => setEditingItem(null)}
+            onSubmit={saveItem}
+            submitting={submitting}
+          />
+        </section>
+
+        <section className="panel records-panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">SHARED DATABASE</p>
+              <h2>数据记录</h2>
+            </div>
+            <button
+              className="button ghost"
+              disabled={loading || submitting}
+              onClick={() => void loadItems()}
+              type="button"
+            >
+              {loading ? '加载中…' : '刷新'}
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="loading-state">正在从 {selectedBackend.label} 读取数据…</div>
+          ) : (
+            <ItemTable
+              busy={submitting}
+              items={items}
+              onDelete={(item) => void deleteItem(item)}
+              onEdit={setEditingItem}
+            />
+          )}
+        </section>
+      </div>
+    </main>
   )
 }
 

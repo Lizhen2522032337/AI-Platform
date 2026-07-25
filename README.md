@@ -29,6 +29,41 @@ enterprise-ai-platform/
 | `/api/gin/` | Gin |
 | `/api/nest/` | NestJS |
 
+页面顶部可以选择 FastAPI、Gin 或 NestJS。三套后端实现相同的 `/items` CRUD API，并共享 PostgreSQL 表 `platform_items`，因此切换后端后看到的是同一批数据。
+
+## PostgreSQL 配置
+
+复制环境变量模板，但不要提交真实配置：
+
+```bash
+cp deploy/.env.example deploy/.env
+```
+
+编辑 `deploy/.env`：
+
+```text
+POSTGRES_HOST=host.docker.internal
+POSTGRES_PORT=5432
+POSTGRES_DB=enterprise_ai_platform
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<实际密码>
+POSTGRES_SSLMODE=disable
+```
+
+`deploy/.env` 已被 Git 忽略。真实密码不得写进 Dockerfile、Compose、源代码或提交记录。
+
+数据库运行在 Linux Docker 宿主机时，Compose 会把 `host.docker.internal` 映射到宿主机网关。PostgreSQL 必须监听 Docker 可以访问的地址，并在 `pg_hba.conf` 中允许对应 Docker bridge 网段连接。
+
+如果数据库尚未创建，可在虚拟机上执行：
+
+```bash
+sudo -u postgres createdb enterprise_ai_platform
+sudo -u postgres psql -d enterprise_ai_platform \
+  -f /opt/enterprise-ai-platform/database/migrations/001_create_platform_items.sql
+```
+
+迁移脚本只执行一次，三套后端均设置为不自动修改表结构。
+
 ## 使用 Docker Compose 启动
 
 在项目根目录执行：
