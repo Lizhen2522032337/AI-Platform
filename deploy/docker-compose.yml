@@ -15,7 +15,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
@@ -39,7 +39,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:

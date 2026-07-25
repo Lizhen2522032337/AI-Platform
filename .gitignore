@@ -1,3 +1,4 @@
-# 部署环境变量包含数据库凭据，禁止提交到 Git。
+# 数据库真实配置固定保存在虚拟机 /etc/enterprise-ai-platform，不进入仓库。
+# 兼容旧部署产生的仓库内文件，防止误提交凭据与状态。
 deploy/.env
 deploy/.state/

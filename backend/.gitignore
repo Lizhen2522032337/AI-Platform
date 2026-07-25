@@ -13,3 +13,6 @@ coverage/
 # 本地环境与日志
 .env
 *.log
+
+# Go 本地编译时默认生成的可执行文件
+gin-service/app

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Compose、Dockerfile、数据库迁移或多个基础配置变化时执行完整更新。
+# 从 Git 拉取代码后，迁移数据库并重建全部服务。
 set -Eeuo pipefail
 
 readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,9 +8,9 @@ readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${CURRENT_DIR}/lib/common.sh"
 
 main() {
-    ensure_repository
+    pull_code "${1:-}"
     ensure_docker_compose
-    ensure_env_file
+    ensure_database_env
     run_migrations
     compose config --quiet
     compose build --pull

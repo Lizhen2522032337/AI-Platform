@@ -12,11 +12,11 @@ main() {
 
     ensure_repository
     ensure_docker_compose
-    ensure_env_file
+    ensure_database_env
     ensure_clean_worktree
 
-    if [[ -z "${target_commit}" ]] && [[ -f "${STATE_DIR}/previous_commit" ]]; then
-        target_commit="$(<"${STATE_DIR}/previous_commit")"
+    if [[ -z "${target_commit}" ]] && [[ -f "${DEPLOY_STATE_DIR}/previous_commit" ]]; then
+        target_commit="$(<"${DEPLOY_STATE_DIR}/previous_commit")"
     fi
     [[ -n "${target_commit}" ]] || die '没有找到回滚记录，请显式传入 Commit ID'
     git -C "${REPO_ROOT}" cat-file -e "${target_commit}^{commit}" 2>/dev/null \

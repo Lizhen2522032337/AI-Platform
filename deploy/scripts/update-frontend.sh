@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-# 只重建并更新 React 前端。
+# 从 Git 拉取代码后，只重建并更新 React 前端。
 set -Eeuo pipefail
 readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${CURRENT_DIR}/lib/common.sh"
+pull_code "${1:-}"
 update_one_service frontend

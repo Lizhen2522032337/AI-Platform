@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 
-# 所有部署脚本共用的安全函数。该文件只应被其他脚本 source，不应单独执行。
+# 所有 Linux 部署脚本共用的安全函数。本文件只应被其他脚本 source。
 set -Eeuo pipefail
 
 readonly COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR="$(cd -- "${COMMON_DIR}/.." && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+
+# 非敏感部署参数和数据库凭据都放在 Git 仓库之外，重新克隆代码不会覆盖它们。
+DEPLOY_CONFIG_FILE="${DEPLOY_CONFIG_FILE:-/etc/enterprise-ai-platform/deploy.env}"
+if [[ -f "${DEPLOY_CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${DEPLOY_CONFIG_FILE}"
+fi
+
 readonly COMPOSE_FILE="${REPO_ROOT}/deploy/docker-compose.yml"
-readonly ENV_FILE="${REPO_ROOT}/deploy/.env"
 readonly MIGRATIONS_DIR="${REPO_ROOT}/database/migrations"
-readonly STATE_DIR="${REPO_ROOT}/deploy/.state"
+readonly DATABASE_ENV_FILE="${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}"
+readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
+readonly POSTGRES_CLIENT_IMAGE="${POSTGRES_CLIENT_IMAGE:-postgres:16-alpine}"
+export DATABASE_ENV_FILE
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -28,27 +38,6 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"
 }
 
-ensure_repository() {
-    git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-        || die "${REPO_ROOT} 不是 Git 仓库"
-    [[ -f "${COMPOSE_FILE}" ]] || die "找不到 ${COMPOSE_FILE}"
-}
-
-ensure_docker_compose() {
-    require_command docker
-    docker compose version >/dev/null 2>&1 || die "未安装 Docker Compose v2 插件"
-    docker info >/dev/null 2>&1 || die "当前用户无法连接 Docker，请检查 Docker 服务和用户权限"
-}
-
-ensure_env_file() {
-    [[ -f "${ENV_FILE}" ]] || die "找不到 deploy/.env，请先执行 first-deploy.sh 或根据 deploy/.env.example 创建"
-    chmod 600 "${ENV_FILE}"
-}
-
-compose() {
-    docker compose -f "${COMPOSE_FILE}" "$@"
-}
-
 run_privileged() {
     if [[ ${EUID} -eq 0 ]]; then
         "$@"
@@ -58,27 +47,28 @@ run_privileged() {
     fi
 }
 
-run_as_postgres() {
-    if [[ ${EUID} -eq 0 ]]; then
-        require_command runuser
-        runuser -u postgres -- "$@"
-    else
-        require_command sudo
-        sudo -u postgres "$@"
-    fi
+ensure_repository() {
+    git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+        || die "${REPO_ROOT} 不是 Git 仓库"
+    [[ -f "${COMPOSE_FILE}" ]] || die "找不到 ${COMPOSE_FILE}"
 }
 
-read_env_value() {
-    local key="$1"
-    local default_value="${2:-}"
-    local value
+ensure_docker_compose() {
+    require_command docker
+    docker compose version >/dev/null 2>&1 || die '未安装 Docker Compose v2 插件'
+    docker info >/dev/null 2>&1 \
+        || die '当前用户无法连接 Docker；请检查 Docker 服务和 docker 用户组权限'
+}
 
-    value="$(sed -n "s/^${key}=//p" "${ENV_FILE}" | tail -n 1)"
-    if [[ -z "${value}" ]]; then
-        printf '%s' "${default_value}"
-    else
-        printf '%s' "${value}"
-    fi
+ensure_database_env() {
+    [[ -f "${DATABASE_ENV_FILE}" ]] \
+        || die "找不到独立数据库配置：${DATABASE_ENV_FILE}；请先执行 first-deploy.sh 或按模板创建"
+    chmod 600 "${DATABASE_ENV_FILE}" 2>/dev/null \
+        || warn "无法把 ${DATABASE_ENV_FILE} 权限改为 600，请检查文件所有者"
+}
+
+compose() {
+    DATABASE_ENV_FILE="${DATABASE_ENV_FILE}" docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
 ensure_clean_worktree() {
@@ -86,7 +76,7 @@ ensure_clean_worktree() {
     changes="$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=normal)"
     if [[ -n "${changes}" ]]; then
         printf '%s\n' "${changes}" >&2
-        die "仓库存在本地修改，请先查明来源；脚本不会自动覆盖"
+        die '仓库存在本地修改；脚本不会自动覆盖，请先查明来源并提交、暂存或清理'
     fi
 }
 
@@ -94,26 +84,68 @@ record_deploy_state() {
     local commit="$1"
     local branch="$2"
 
-    mkdir -p "${STATE_DIR}"
-    printf '%s\n' "${commit}" >"${STATE_DIR}/previous_commit"
-    printf '%s\n' "${branch}" >"${STATE_DIR}/production_branch"
+    mkdir -p "${DEPLOY_STATE_DIR}"
+    printf '%s\n' "${commit}" >"${DEPLOY_STATE_DIR}/previous_commit"
+    printf '%s\n' "${branch}" >"${DEPLOY_STATE_DIR}/production_branch"
+}
+
+pull_code() {
+    local requested_branch="${1:-}"
+    local target_branch old_commit old_branch new_commit
+
+    ensure_repository
+    require_command git
+    ensure_clean_worktree
+
+    old_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+    old_branch="$(git -C "${REPO_ROOT}" branch --show-current)"
+    target_branch="${requested_branch:-${DEPLOY_BRANCH:-${old_branch}}}"
+    [[ -n "${target_branch}" ]] || die '无法确定部署分支，请传入分支名或设置 DEPLOY_BRANCH'
+    record_deploy_state "${old_commit}" "${old_branch:-${target_branch}}"
+
+    log "从 origin 拉取分支：${target_branch}"
+    git -C "${REPO_ROOT}" fetch origin "${target_branch}"
+    if git -C "${REPO_ROOT}" show-ref --verify --quiet "refs/heads/${target_branch}"; then
+        git -C "${REPO_ROOT}" switch "${target_branch}"
+    else
+        git -C "${REPO_ROOT}" switch --track -c "${target_branch}" "origin/${target_branch}"
+    fi
+    git -C "${REPO_ROOT}" pull --ff-only origin "${target_branch}"
+
+    new_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+    printf '更新前：%s\n更新后：%s\n' "${old_commit}" "${new_commit}"
+    git -C "${REPO_ROOT}" diff --name-only "${old_commit}" "${new_commit}"
 }
 
 run_migrations() {
-    local db_name
-    local migration
+    local migration_mount
 
-    ensure_env_file
-    require_command psql
-    db_name="$(read_env_value POSTGRES_DB enterprise_ai_platform)"
-    [[ "${db_name}" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_DB 只能包含字母、数字和下划线"
-    [[ -d "${MIGRATIONS_DIR}" ]] || die "找不到数据库迁移目录"
+    ensure_database_env
+    [[ -d "${MIGRATIONS_DIR}" ]] || die "找不到数据库迁移目录：${MIGRATIONS_DIR}"
+    migration_mount="${MIGRATIONS_DIR}:/migrations:ro"
 
-    log "开始执行数据库迁移"
-    while IFS= read -r -d '' migration; do
-        log "执行迁移：$(basename "${migration}")"
-        run_as_postgres psql -v ON_ERROR_STOP=1 -d "${db_name}" -f "${migration}"
-    done < <(find "${MIGRATIONS_DIR}" -maxdepth 1 -type f -name '*.sql' -print0 | sort -z)
+    log "使用 ${DATABASE_ENV_FILE} 连接数据库并执行迁移"
+    docker run --rm \
+        --env-file "${DATABASE_ENV_FILE}" \
+        --add-host 'host.docker.internal:host-gateway' \
+        --volume "${migration_mount}" \
+        "${POSTGRES_CLIENT_IMAGE}" \
+        sh -ec '
+            export PGHOST="$POSTGRES_HOST"
+            export PGPORT="${POSTGRES_PORT:-5432}"
+            export PGDATABASE="$POSTGRES_DB"
+            export PGUSER="$POSTGRES_USER"
+            export PGPASSWORD="$POSTGRES_PASSWORD"
+            export PGSSLMODE="${POSTGRES_SSLMODE:-disable}"
+            found=0
+            for migration in /migrations/*.sql; do
+                [ -f "$migration" ] || continue
+                found=1
+                echo "执行迁移：$(basename "$migration")"
+                psql -v ON_ERROR_STOP=1 -f "$migration"
+            done
+            [ "$found" -eq 1 ] || { echo "没有找到 SQL 迁移文件" >&2; exit 1; }
+        '
 }
 
 wait_http() {
@@ -130,6 +162,7 @@ wait_http() {
         fi
         sleep 2
     done
+    compose logs --tail=100 >&2 || true
     die "验收失败：${description} (${url})"
 }
 
@@ -164,7 +197,7 @@ update_one_service() {
     validate_service "${service}"
     ensure_repository
     ensure_docker_compose
-    ensure_env_file
+    ensure_database_env
     compose config --quiet
 
     if is_backend_service "${service}"; then
@@ -176,11 +209,10 @@ update_one_service() {
         compose run --rm --no-deps nginx nginx -t
         compose up -d --no-deps --force-recreate nginx
     else
-        log "构建 ${service}"
+        log "只构建并重建 ${service}"
         compose build "${service}"
-        log "重建 ${service}"
         compose up -d --no-deps "${service}"
-        # Nginx 启动时会解析容器地址，服务容器重建后需要刷新解析结果。
+        # 服务容器地址可能变化，重启 Nginx 以刷新上游解析结果。
         compose restart nginx
     fi
 

@@ -1,22 +1,85 @@
-# Linux 部署与更新脚本
+# 首次部署与独立更新手册
 
-所有脚本都位于 `deploy/scripts`，可从任意目录执行。脚本使用 `set -Eeuo pipefail`，遇到命令失败会立即停止，不会静默继续。
+## 1. 固定部署约束
 
-## 1. 首次部署
+- Windows 家庭版宿主机不安装、不运行 Docker，只负责编辑代码、Git、SSH 和浏览器验收。
+- Docker Engine、Docker Compose、镜像构建和容器运行全部位于 Linux 虚拟机 `192.168.86.133`。
+- Git 仓库部署到 `/opt/enterprise-ai-platform`。
+- 数据库连接配置独立保存在虚拟机 `/etc/enterprise-ai-platform/database.env`，不进入 Git 仓库。
+- 当前部署分支为 `agent/initial-project`。合并到 `master` 后，只需修改 `/etc/enterprise-ai-platform/deploy.env` 中的 `DEPLOY_BRANCH`。
 
-### 1.1 一条引导脚本部署
+## 2. 首次部署前准备
 
-在普通 sudo 用户下执行，不要先切换为 root。PR 合并到 `master` 后执行：
+### 2.1 从 Windows 登录虚拟机
 
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/Lizhen2522032337/AI-Platform/master/deploy/scripts/bootstrap-deploy.sh \
-  -o /tmp/bootstrap-deploy.sh
-chmod +x /tmp/bootstrap-deploy.sh
-/tmp/bootstrap-deploy.sh master
+```powershell
+ssh <虚拟机用户名>@192.168.86.133
 ```
 
-PR 尚未合并时，把下载地址和脚本参数中的分支都改为 `agent/initial-project`：
+在虚拟机确认系统、资源和端口：
+
+```bash
+cat /etc/os-release
+uname -m
+free -h
+df -h /
+sudo ss -lntp | grep ':80 ' || true
+```
+
+建议至少 2 核 CPU、4 GB 内存和 10 GB 可用空间。
+
+### 2.2 确认 Git、Docker Engine 和 Compose v2
+
+```bash
+git --version
+docker --version
+docker compose version
+docker info
+curl --version
+```
+
+若缺少 Docker，请按虚拟机发行版使用 Docker 官方仓库安装 Docker Engine、Buildx 和 Compose 插件：
+
+- Ubuntu：<https://docs.docker.com/engine/install/ubuntu/>
+- Debian：<https://docs.docker.com/engine/install/debian/>
+- CentOS：<https://docs.docker.com/engine/install/centos/>
+- RHEL：<https://docs.docker.com/engine/install/rhel/>
+
+安装后启用服务，并允许当前可信运维用户执行 Docker：
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+```
+
+退出 SSH 后重新登录，再验证：
+
+```bash
+docker info
+docker compose version
+docker run --rm hello-world
+```
+
+### 2.3 准备 PostgreSQL
+
+数据库可以在虚拟机宿主机、其他虚拟机、云数据库或数据库容器中，但必须先满足：
+
+1. 目标数据库已创建。
+2. 数据库用户拥有目标库建表、建索引和 CRUD 权限。
+3. 数据库允许来自 Docker 网络的 TCP 连接。
+4. 防火墙只对实际需要的来源开放 `5432/tcp`。
+
+当前数据库若运行在同一台虚拟机宿主机，配置中的地址使用 `host.docker.internal`。PostgreSQL 需要监听 Docker 可达地址，并在 `pg_hba.conf` 中允许实际 Docker 网段。例如当前默认库和用户均为 `postgres` 时，可使用：
+
+```text
+host    enterprise_ai_platform    postgres    172.16.0.0/12    scram-sha-256
+```
+
+这是宽泛的 Docker 私网范围；生产环境应先用 `docker network inspect` 确认实际子网，再缩小规则。
+
+## 3. 第一次完整部署
+
+确认 `/opt/enterprise-ai-platform` 不存在或为空。然后在虚拟机普通 sudo 用户下执行：
 
 ```bash
 curl -fsSL \
@@ -26,89 +89,126 @@ chmod +x /tmp/bootstrap-deploy.sh
 /tmp/bootstrap-deploy.sh agent/initial-project
 ```
 
-引导脚本会：
+脚本会依次：
 
-1. 创建 `/opt/enterprise-ai-platform` 并克隆指定分支。
-2. 交互式读取 PostgreSQL 密码并创建权限为 `600` 的 `deploy/.env`。
-3. 创建 `enterprise_ai_platform` 数据库（不存在时）。
-4. 配置 PostgreSQL 监听地址、`pg_hba.conf` 和 Docker 私有网段防火墙规则。
-5. 依次执行数据库迁移、镜像构建、容器启动和接口验收。
+1. 创建 `/opt/enterprise-ai-platform`。
+2. 创建仓库外配置目录 `/etc/enterprise-ai-platform`。
+3. 克隆指定 Git 分支。
+4. 交互式读取数据库地址、端口、库名、用户、密码和 SSL 模式。
+5. 生成权限为 `600` 的 `/etc/enterprise-ai-platform/database.env`。
+6. 使用临时 `postgres:16-alpine` 容器执行 `database/migrations/*.sql`。
+7. 构建前端、三套后端和 Nginx 所需镜像。
+8. 启动容器并验收页面、健康接口和查询接口。
 
-修改 `pg_hba.conf` 前，脚本会在同目录生成带时间戳的备份。要求虚拟机已安装 Git、Docker、Docker Compose v2、PostgreSQL 客户端、curl、sudo，并且 PostgreSQL 由 systemd 管理。
+数据库配置格式如下，真实文件绝不能提交 Git：
 
-### 1.2 仓库已经克隆
+```dotenv
+POSTGRES_HOST=host.docker.internal
+POSTGRES_PORT=5432
+POSTGRES_DB=enterprise_ai_platform
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<实际密码>
+POSTGRES_SSLMODE=disable
+```
+
+非交互部署时，可以预先通过环境变量提供密码和其他数据库参数：
+
+```bash
+POSTGRES_PASSWORD='<实际密码>' /tmp/bootstrap-deploy.sh agent/initial-project
+```
+
+首次部署完成后检查：
 
 ```bash
 cd /opt/enterprise-ai-platform
-./deploy/scripts/first-deploy.sh
+docker compose -f deploy/docker-compose.yml ps
+bash ./deploy/scripts/verify.sh
 ```
 
-如果 `deploy/.env` 已存在，脚本会保留现有文件，不会覆盖密码。
+## 4. 后续独立更新脚本
 
-## 2. 日常更新的固定顺序
-
-先拉取代码，再根据变更文件执行一个更新脚本：
+以下脚本都会先检查工作区、从 Git 拉取 `/etc/enterprise-ai-platform/deploy.env` 中配置的分支，并使用 `git pull --ff-only`。仓库存在本地修改时会立即停止，不会覆盖文件。
 
 ```bash
 cd /opt/enterprise-ai-platform
-./deploy/scripts/pull-code.sh master
 ```
 
-PR 尚未合并时：
+只更新前端：
 
 ```bash
-./deploy/scripts/pull-code.sh agent/initial-project
+bash ./deploy/scripts/update-frontend.sh
 ```
 
-`pull-code.sh` 会：
-
-- 检查工作区；只要存在本地修改就停止，绝不覆盖。
-- 记录更新前 Commit 和生产分支到被 Git 忽略的 `deploy/.state`。
-- 使用 `git pull --ff-only`，禁止隐式合并。
-- 输出更新前后 Commit 以及变更文件列表。
-
-## 3. 按变更范围执行
-
-| 变更范围 | 执行命令 |
-| --- | --- |
-| 只修改 React | `./deploy/scripts/update-frontend.sh` |
-| 只修改 FastAPI | `./deploy/scripts/update-fastapi.sh` |
-| 只修改 Gin | `./deploy/scripts/update-gin.sh` |
-| 只修改 NestJS | `./deploy/scripts/update-nest.sh` |
-| 只修改 Nginx 配置 | `./deploy/scripts/update-nginx.sh` |
-| Compose、Dockerfile、迁移或公共基础配置 | `./deploy/scripts/update-all.sh` |
-
-同时修改多个应用服务时，把 Compose 服务名作为参数：
+只更新 FastAPI：
 
 ```bash
-./deploy/scripts/update-services.sh frontend fastapi-service
+bash ./deploy/scripts/update-fastapi.sh
 ```
 
-允许的服务名：
-
-- `frontend`
-- `fastapi-service`
-- `gin-service`
-- `nest-service`
-- `nginx`
-
-后端和全量更新脚本会先按文件名顺序执行 `database/migrations/*.sql`。迁移文件必须设计成可重复执行。应用容器重建后，脚本会刷新 Nginx，避免 Nginx 保留旧容器地址而返回 502。
-
-## 4. 单独验收
+只更新 Gin：
 
 ```bash
-./deploy/scripts/verify.sh
+bash ./deploy/scripts/update-gin.sh
 ```
 
-该脚本检查容器状态，并轮询以下入口：
+只更新 NestJS：
 
-- React 页面
-- 三个后端的 `/health`
-- 三个后端的 `/items`
+```bash
+bash ./deploy/scripts/update-nest.sh
+```
 
-从 Windows 开发电脑进一步检查：
+显式指定其他分支时，把分支名作为第一个参数：
+
+```bash
+bash ./deploy/scripts/update-frontend.sh master
+```
+
+公共 Compose、Dockerfile、迁移或多个基础配置变化时执行全量更新：
+
+```bash
+bash ./deploy/scripts/update-all.sh
+```
+
+同时更新多个组件：
+
+```bash
+bash ./deploy/scripts/update-services.sh frontend fastapi-service
+bash ./deploy/scripts/update-services.sh --branch master gin-service nest-service
+```
+
+单组件脚本只构建并重建目标容器，不重建其他业务容器；三套后端更新前会先执行幂等数据库迁移。Nginx 会被快速重启一次，以刷新重建后容器的地址。
+
+## 5. 更换数据库
+
+先备份并修改仓库外配置：
+
+```bash
+cp /etc/enterprise-ai-platform/database.env \
+  /etc/enterprise-ai-platform/database.env.bak.$(date +%Y%m%d%H%M%S)
+vi /etc/enterprise-ai-platform/database.env
+```
+
+确认新数据库已经创建并授权后，执行：
+
+```bash
+cd /opt/enterprise-ai-platform
+bash ./deploy/scripts/apply-database-config.sh
+```
+
+该脚本会在新数据库执行迁移，只重建三套后端并验收，不重建 React 前端。若失败，恢复备份配置后再次执行同一脚本。
+
+## 6. 验收
+
+虚拟机内：
+
+```bash
+bash /opt/enterprise-ai-platform/deploy/scripts/verify.sh
+```
+
+Windows PowerShell：
 
 ```powershell
+Test-NetConnection 192.168.86.133 -Port 80
 Invoke-WebRequest http://192.168.86.133/
 Invoke-RestMethod http://192.168.86.133/api/fastapi/health
 Invoke-RestMethod http://192.168.86.133/api/gin/health
@@ -118,42 +218,34 @@ Invoke-RestMethod http://192.168.86.133/api/gin/items
 Invoke-RestMethod http://192.168.86.133/api/nest/items
 ```
 
-## 5. 更新失败时回滚
-
-不传参数时，回滚到最近一次 `pull-code.sh` 记录的 Commit：
+## 7. 状态、日志和回滚
 
 ```bash
-./deploy/scripts/rollback.sh
+cd /opt/enterprise-ai-platform
+docker compose -f deploy/docker-compose.yml ps -a
+docker compose -f deploy/docker-compose.yml logs --tail=200
+docker compose -f deploy/docker-compose.yml logs -f --tail=100 fastapi-service
 ```
 
-也可以明确指定 Commit：
+更新脚本会把更新前提交记录到 `~/.local/state/enterprise-ai-platform/previous_commit`。回滚最近一次更新：
 
 ```bash
-./deploy/scripts/rollback.sh <commit-id>
+bash ./deploy/scripts/rollback.sh
 ```
 
-回滚完成后仓库处于 detached HEAD。问题修复后恢复生产分支：
+或回滚到指定提交：
 
 ```bash
-git switch master
-git pull --ff-only origin master
-./deploy/scripts/update-all.sh
+bash ./deploy/scripts/rollback.sh <commit-id>
 ```
 
-PR 尚未合并时，将两条 Git 命令改为：
+回滚后处于 detached HEAD。修复完成后执行对应分支的全量更新脚本恢复。
 
-```bash
-git switch agent/initial-project
-git pull --ff-only origin agent/initial-project
-./deploy/scripts/update-all.sh
-```
+## 8. 重要注意事项
 
-之所以先直接使用 Git，是因为目标回滚提交可能早于这些部署脚本，回滚后 `pull-code.sh` 可能暂时不存在。
-
-## 6. 注意事项
-
-- 不要把 `deploy/.env` 上传或提交到 Git；脚本不会打印数据库密码。
-- `docker compose config` 可能展开敏感环境变量，因此脚本统一使用 `config --quiet`。
-- 当前每个服务只有一个容器，更新会产生短暂重启；后端或 Nginx 更新期间可能短暂返回 502。
-- `update-*.sh` 只更新当前工作区代码，不会自动拉取 Git；必须先运行 `pull-code.sh`。
-- 数据库结构变更需要兼容旧版本应用，避免回滚代码后无法读取新结构。
+- 不要删除 `/etc/enterprise-ai-platform`，除非确定不再需要当前数据库配置。
+- 不要把 `database.env`、密码、令牌或私钥复制进仓库。
+- 不要在 Windows 宿主机运行本文中的 Docker 命令。
+- 更新脚本不会自动清理镜像或卷，避免误删数据库数据。
+- 当前每个服务只有一个容器，重建期间会有短暂不可用。
+- 数据库迁移必须保持向后兼容，否则代码回滚可能无法读取新结构。

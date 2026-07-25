@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 同时更新指定服务，例如：update-services.sh frontend fastapi-service
+# 从 Git 拉取后同时更新多个服务，例如：update-services.sh frontend fastapi-service。
 set -Eeuo pipefail
 
 readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,18 +8,27 @@ readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${CURRENT_DIR}/lib/common.sh"
 
 main() {
+    local branch=''
     local service
     local needs_migration=0
     local includes_nginx=0
+    local -a requested_services=()
     local -a build_services=()
 
+    if [[ "${1:-}" == '--branch' ]]; then
+        (($# >= 3)) || die '用法：update-services.sh --branch <分支> <服务...>'
+        branch="$2"
+        shift 2
+    fi
     (($# > 0)) || die '请至少指定一个服务'
-    ensure_repository
+    requested_services=("$@")
+
+    pull_code "${branch}"
     ensure_docker_compose
-    ensure_env_file
+    ensure_database_env
     compose config --quiet
 
-    for service in "$@"; do
+    for service in "${requested_services[@]}"; do
         validate_service "${service}"
         if is_backend_service "${service}"; then
             needs_migration=1
@@ -46,7 +55,7 @@ main() {
     fi
 
     compose ps
-    for service in "$@"; do
+    for service in "${requested_services[@]}"; do
         verify_service "${service}"
     done
 }

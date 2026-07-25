@@ -10,7 +10,7 @@ source "${CURRENT_DIR}/lib/common.sh"
 main() {
     ensure_repository
     ensure_docker_compose
-    ensure_env_file
+    ensure_database_env
     compose ps
 
     wait_http 'http://127.0.0.1/' 'React 前端'
