@@ -11,6 +11,10 @@ export default defineConfig({
         target: 'http://192.168.86.133:80',
         changeOrigin: true,
       },
+      '/realtime': {
+        target: 'http://192.168.86.133:80',
+        changeOrigin: true,
+      },
     },
   },
 })

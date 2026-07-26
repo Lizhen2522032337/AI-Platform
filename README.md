@@ -1,43 +1,36 @@
 # Enterprise AI Platform
 
-React 前端与 FastAPI、Gin、NestJS 三套后端组成的容器化项目。三套后端共享 PostgreSQL 表 `platform_items`，Nginx 通过虚拟机 `192.168.86.133:80` 提供统一入口。
+这是一个面向企业 AI 任务处理的容器化基础项目。React 只访问 NestJS 核心业务 API；耗时任务通过 RabbitMQ 交给 Worker；Worker 调用 FastAPI AI 服务；Gin 通过 Redis 提供实时 SSE 状态。
 
-| 路径 | 服务 |
-| --- | --- |
-| `/` | React 前端 |
-| `/api/fastapi/` | FastAPI |
-| `/api/gin/` | Gin |
-| `/api/nest/` | NestJS |
+```text
+React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI
+                  |                     |          |
+               PostgreSQL            Redis     Qdrant
+                                             + MinIO
 
-## 部署原则
-
-- Windows 家庭版宿主机不运行 Docker。
-- Docker 构建和运行全部在 Linux 虚拟机 `192.168.86.133` 完成。
-- 应用代码由虚拟机直接从 GitHub 拉取。
-- 数据库容器由新环境独立管理；应用脚本不会在首次部署时创建或迁移数据库。
-- 数据库真实连接配置保存在仓库外的 `/etc/enterprise-ai-platform/database.env`。
-
-首次完整部署、四个组件的独立更新、更换数据库、验收和回滚命令见 [`docs/deployment-scripts.md`](docs/deployment-scripts.md)。
-
-首次部署入口：
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/Lizhen2522032337/AI-Platform/agent/initial-project/deploy/scripts/bootstrap-deploy.sh \
-  -o /tmp/bootstrap-deploy.sh
-chmod +x /tmp/bootstrap-deploy.sh
-/tmp/bootstrap-deploy.sh agent/initial-project
+React -> Nginx -> Gin realtime -> Redis
 ```
 
-独立更新示例：
+## 服务职责
 
-```bash
-cd /opt/enterprise-ai-platform
-bash ./deploy/scripts/update-frontend.sh
-bash ./deploy/scripts/update-backends.sh
-bash ./deploy/scripts/update-fastapi.sh
-bash ./deploy/scripts/update-gin.sh
-bash ./deploy/scripts/update-nest.sh
-```
+| 服务 | 职责 | 对外路径 |
+| --- | --- | --- |
+| React | 用户界面 | `/` |
+| Nginx | 唯一入口与反向代理 | `:80` |
+| NestJS | 核心业务、任务创建和查询 | `/api/` |
+| Gin | SSE 实时任务状态 | `/realtime/` |
+| FastAPI | AI 处理、向量与结果文件 | 仅 Docker 内网 |
+| Worker | 消费 RabbitMQ 并协调 AI 处理 | 仅 Docker 内网 |
+| PostgreSQL | 持久化任务 | 仅 Docker 内网 |
+| Redis | 实时状态缓存 | 仅 Docker 内网 |
+| RabbitMQ | 持久化异步任务队列 | 仅 Docker 内网 |
+| Qdrant | 向量存储 | 仅 Docker 内网 |
+| MinIO | AI 结果文件 | 仅 Docker 内网 |
 
-这些更新脚本会先安全拉取 Git，再只重建目标服务；`update-backends.sh` 会一次性更新三套后端但不重建前端。
+## 文档入口
+
+- [项目架构与目录](docs/architecture.md)
+- [接口契约](docs/api-contract.md)
+- [首次手动部署与更新脚本](docs/deployment-scripts.md)
+
+部署约束：Windows 家庭版不运行 Docker；所有镜像构建和容器运行均位于 Linux 虚拟机 `192.168.86.133`。真实配置固定保存在仓库外的 `/etc/enterprise-ai-platform`。

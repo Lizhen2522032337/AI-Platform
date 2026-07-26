@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 从 Git 拉取代码后，只迁移数据库并重建三套后端；不会重建前端容器。
+# 从 Git 拉取代码后，重建 NestJS、FastAPI、Gin 和 Worker；不重建前端。
 set -Eeuo pipefail
 
 readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,28 +13,36 @@ main() {
         fastapi-service
         gin-service
         nest-service
+        worker
     )
 
-    # 单次拉取可以保证三套后端部署自同一个 Git 提交。
+    # 单次拉取保证全部应用服务来自同一个 Git 提交。
+    acquire_deploy_lock
     pull_code "${branch}"
     ensure_docker_compose
     ensure_database_env
+    ensure_platform_env
     compose config --quiet
+    start_database_if_managed
+    start_infrastructure
     run_migrations
 
-    log '构建三套后端镜像'
+    log '构建 NestJS、FastAPI、Gin 和 Worker 镜像'
     compose build "${backend_services[@]}"
-    log '只重建三套后端容器'
-    compose up -d --no-deps "${backend_services[@]}"
+    log '只重建后端和 Worker 容器'
+    compose up -d --no-deps --force-recreate "${backend_services[@]}"
+    for service in "${backend_services[@]}"; do
+        wait_for_healthy "${service}"
+    done
 
-    # 后端容器地址可能变化，重启 Nginx 以刷新上游解析结果。
-    compose restart nginx
+    refresh_nginx
     compose ps
 
     verify_service fastapi-service
     verify_service gin-service
     verify_service nest-service
-    log '三套后端更新完成，前端容器未重建'
+    verify_service worker
+    log '后端和 Worker 更新完成，前端容器未重建'
 }
 
 main "$@"

@@ -11,6 +11,7 @@ main() {
     local branch=''
     local service
     local needs_migration=0
+    local needs_infrastructure=0
     local includes_nginx=0
     local -a requested_services=()
     local -a build_services=()
@@ -23,14 +24,19 @@ main() {
     (($# > 0)) || die '请至少指定一个服务'
     requested_services=("$@")
 
+    acquire_deploy_lock
     pull_code "${branch}"
     ensure_docker_compose
     ensure_database_env
+    ensure_platform_env
     compose config --quiet
 
     for service in "${requested_services[@]}"; do
         validate_service "${service}"
         if is_backend_service "${service}"; then
+            needs_infrastructure=1
+        fi
+        if uses_database "${service}"; then
             needs_migration=1
         fi
         if [[ "${service}" == 'nginx' ]]; then
@@ -40,18 +46,26 @@ main() {
         fi
     done
 
+    if ((needs_infrastructure)); then
+        start_infrastructure
+    fi
     if ((needs_migration)); then
+        start_database_if_managed
         run_migrations
     fi
     if ((${#build_services[@]} > 0)); then
         compose build "${build_services[@]}"
-        compose up -d --no-deps "${build_services[@]}"
+        compose up -d --no-deps --force-recreate "${build_services[@]}"
+        for service in "${build_services[@]}"; do
+            wait_for_healthy "${service}"
+        done
     fi
     if ((includes_nginx)); then
-        compose run --rm --no-deps nginx nginx -t
+        compose exec -T nginx nginx -t
         compose up -d --no-deps --force-recreate nginx
+        wait_for_healthy nginx
     else
-        compose restart nginx
+        refresh_nginx
     fi
 
     compose ps

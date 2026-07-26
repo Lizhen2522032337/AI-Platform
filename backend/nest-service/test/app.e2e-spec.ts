@@ -20,7 +20,11 @@ describe('AppController (e2e)', () => {
     return request(app.getHttpServer())
       .get('/')
       .expect(200)
-      .expect('Hello World!');
+      .expect({
+        service: 'nest-service',
+        role: 'core-business-api',
+        status: 'running',
+      });
   });
 
   afterEach(async () => {

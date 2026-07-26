@@ -15,8 +15,12 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('returns the service role', () => {
+      expect(appController.getInfo()).toEqual({
+        service: 'nest-service',
+        role: 'core-business-api',
+        status: 'running',
+      });
     });
   });
 });

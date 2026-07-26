@@ -1,254 +1,369 @@
-# 首次部署与独立更新手册
+# Linux 虚拟机部署与更新手册
 
-## 1. 固定部署约束
+适用环境：Windows 家庭版开发机，Linux 虚拟机 `192.168.86.133` 已安装 Git、Docker Engine、Docker Compose v2。Windows 不运行 Docker。
 
-- Windows 家庭版宿主机不安装、不运行 Docker，只负责编辑代码、Git、SSH 和浏览器验收。
-- Docker Engine、Docker Compose、镜像构建和容器运行全部位于 Linux 虚拟机 `192.168.86.133`。
-- Git 仓库部署到 `/opt/enterprise-ai-platform`。
-- 数据库连接配置独立保存在虚拟机 `/etc/enterprise-ai-platform/database.env`，不进入 Git 仓库。
-- 当前部署分支为 `agent/initial-project`。合并到 `master` 后，只需修改 `/etc/enterprise-ai-platform/deploy.env` 中的 `DEPLOY_BRANCH`。
+第一次建议完整执行第 4 节的手动步骤；理解启动顺序并验收成功后，再使用第 5 节的一键脚本。
 
-## 2. 首次部署前准备
+## 1. 固定路径和启动顺序
 
-### 2.1 从 Windows 登录虚拟机
+| 内容 | 固定位置 |
+| --- | --- |
+| Git 仓库 | `/opt/enterprise-ai-platform` |
+| PostgreSQL 配置 | `/etc/enterprise-ai-platform/database.env` |
+| Redis/RabbitMQ/MinIO 等配置 | `/etc/enterprise-ai-platform/platform.env` |
+| 部署分支和数据库模式 | `/etc/enterprise-ai-platform/deploy.env` |
+
+启动顺序：
+
+1. PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO。
+2. 数据库迁移和 MinIO 桶初始化。
+3. FastAPI、NestJS、Gin、Worker、React。
+4. 所有应用健康后最后启动 Nginx。
+
+## 2. 登录并检查虚拟机
+
+在 Windows PowerShell 登录：
 
 ```powershell
 ssh <虚拟机用户名>@192.168.86.133
 ```
 
-在虚拟机确认系统、资源和端口：
-
-```bash
-cat /etc/os-release
-uname -m
-free -h
-df -h /
-sudo ss -lntp | grep ':80 ' || true
-```
-
-建议至少 2 核 CPU、4 GB 内存和 10 GB 可用空间。
-
-### 2.2 确认 Git、Docker Engine 和 Compose v2
+以下命令均在 Linux SSH 终端执行：
 
 ```bash
 git --version
 docker --version
 docker compose version
 docker info
-curl --version
+sudo ss -lntp | grep ':80 ' || true
+free -h
+df -h /
 ```
 
-若缺少 Docker，请按虚拟机发行版使用 Docker 官方仓库安装 Docker Engine、Buildx 和 Compose 插件：
-
-- Ubuntu：<https://docs.docker.com/engine/install/ubuntu/>
-- Debian：<https://docs.docker.com/engine/install/debian/>
-- CentOS：<https://docs.docker.com/engine/install/centos/>
-- RHEL：<https://docs.docker.com/engine/install/rhel/>
-
-安装后启用服务，并允许当前可信运维用户执行 Docker：
+若 `docker info` 权限不足：
 
 ```bash
-sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
+exit
 ```
 
-退出 SSH 后重新登录，再验证：
+退出后重新 SSH 登录。建议至少 4 核 CPU、8 GB 内存和 30 GB 可用磁盘；Qdrant、MinIO、RabbitMQ 和多语言镜像会明显增加资源占用。
 
-```bash
-docker info
-docker compose version
-docker run --rm hello-world
-```
+## 3. 准备仓库外配置
 
-### 2.3 准备数据库连接文件
-
-数据库已经由新环境中的独立 Docker 容器提供。应用首次部署脚本不会创建、启动、修改或迁移数据库。执行应用部署前，请确认：
-
-1. 数据库容器已经运行，并通过主机端口或可达的 Docker 网络提供连接。
-2. 目标数据库、用户、权限和 `platform_items` 表结构已经准备完成。
-3. `/etc/enterprise-ai-platform/database.env` 已保存正确连接参数。
-
-在虚拟机执行：
+### 3.1 创建目录和空文件
 
 ```bash
 sudo install -d -m 700 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
 install -m 600 /dev/null /etc/enterprise-ai-platform/database.env
+install -m 600 /dev/null /etc/enterprise-ai-platform/platform.env
+install -m 600 /dev/null /etc/enterprise-ai-platform/deploy.env
+```
+
+### 3.2 PostgreSQL 配置
+
+```bash
 vi /etc/enterprise-ai-platform/database.env
 ```
 
-连接文件示例：
+填入并替换密码：
 
 ```dotenv
-POSTGRES_HOST=host.docker.internal
+POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_DB=enterprise_ai_platform
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=<实际密码>
+POSTGRES_USER=enterprise_ai
+POSTGRES_PASSWORD=替换成至少32位随机密码
 POSTGRES_SSLMODE=disable
 ```
 
-若数据库容器与应用容器不在同一个 Compose 网络中，最简单的方式是把数据库端口发布到虚拟机，并使用 `host.docker.internal` 连接。真实密码不得提交 Git。
-
-## 3. 第一次完整部署
-
-确认 `/opt/enterprise-ai-platform` 不存在或为空。然后在虚拟机普通 sudo 用户下执行：
+### 3.3 平台中间件配置
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/Lizhen2522032337/AI-Platform/agent/initial-project/deploy/scripts/bootstrap-deploy.sh \
-  -o /tmp/bootstrap-deploy.sh
+vi /etc/enterprise-ai-platform/platform.env
+```
+
+填入：
+
+```dotenv
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=替换成另一个至少32位随机密码
+
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_DEFAULT_USER=enterprise_ai
+RABBITMQ_DEFAULT_PASS=替换成另一个至少32位随机密码
+RABBITMQ_DEFAULT_VHOST=enterprise_ai
+RABBITMQ_TASK_QUEUE=ai_tasks
+
+AI_SERVICE_URL=http://fastapi-service:8000
+
+QDRANT_URL=http://qdrant:6333
+QDRANT_COLLECTION=ai_task_vectors
+
+MINIO_ENDPOINT=minio:9000
+MINIO_ROOT_USER=enterprise_ai_minio
+MINIO_ROOT_PASSWORD=替换成另一个至少32位随机密码
+MINIO_BUCKET=ai-results
+MINIO_USE_SSL=false
+
+LOG_LEVEL=INFO
+```
+
+### 3.4 部署行为配置
+
+```bash
+vi /etc/enterprise-ai-platform/deploy.env
+```
+
+填入：
+
+```dotenv
+DEPLOY_BRANCH=agent/initial-project
+DATABASE_MODE=managed
+DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
+PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
+```
+
+`managed` 表示 Compose 负责运行 PostgreSQL。以后使用外部数据库时改为 `external`。
+
+检查文件，不要打印真实密码：
+
+```bash
+ls -l /etc/enterprise-ai-platform
+grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
+grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/platform.env
+cat /etc/enterprise-ai-platform/deploy.env
+```
+
+## 4. 第一次部署：完全手动执行
+
+### 第 1 步：拉取代码
+
+```bash
+sudo install -d -m 755 -o "$USER" -g "$(id -gn)" /opt/enterprise-ai-platform
+git clone --branch agent/initial-project --single-branch \
+  https://github.com/Lizhen2522032337/AI-Platform.git \
+  /opt/enterprise-ai-platform
+cd /opt/enterprise-ai-platform
+git status --short --branch
+git log -1 --oneline
+```
+
+私有仓库应使用 GitHub Deploy Key 或其他安全凭据，不要把令牌写进部署脚本。
+
+### 第 2 步：声明配置路径并检查 Compose
+
+```bash
+cd /opt/enterprise-ai-platform
+export DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
+export PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
+docker compose -f deploy/docker-compose.yml --profile managed-db config --quiet
+```
+
+没有输出即表示 Compose 基础语法通过。
+
+### 第 3 步：启动数据和中间件
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db up -d \
+  postgres redis rabbitmq qdrant minio
+docker compose -f deploy/docker-compose.yml --profile managed-db ps
+```
+
+等待 PostgreSQL、Redis 和 RabbitMQ 显示 `healthy`。查看失败服务日志：
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=100 postgres
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=100 redis
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=100 rabbitmq
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=100 qdrant
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=100 minio
+```
+
+### 第 4 步：初始化存储和数据库
+
+创建 MinIO 结果桶：
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db run --rm minio-init
+```
+
+执行 PostgreSQL 幂等迁移：
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db run --rm migrator
+```
+
+### 第 5 步：构建全部应用镜像
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db build --pull \
+  frontend nest-service fastapi-service gin-service worker
+```
+
+第一次会下载 Node.js、Python、Go 和各语言依赖，耗时较长。
+
+### 第 6 步：启动应用，但暂不启动 Nginx
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db up -d \
+  frontend fastapi-service nest-service gin-service worker
+docker compose -f deploy/docker-compose.yml --profile managed-db ps
+```
+
+等待五个应用均变成 `healthy`。如果某个失败：
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150 nest-service
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150 fastapi-service
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150 gin-service
+docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150 worker
+```
+
+### 第 7 步：最后启动 Nginx
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db up -d nginx
+docker compose -f deploy/docker-compose.yml --profile managed-db ps
+```
+
+只有 Nginx 应显示宿主机端口 `0.0.0.0:80->80/tcp`。
+
+### 第 8 步：虚拟机内验收
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/healthz
+docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/api/health
+docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/api/tasks
+docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/realtime/health
+```
+
+### 第 9 步：Windows 验收
+
+在 Windows PowerShell 执行：
+
+```powershell
+Test-NetConnection 192.168.86.133 -Port 80
+Invoke-RestMethod http://192.168.86.133/healthz
+Invoke-RestMethod http://192.168.86.133/api/health
+Invoke-RestMethod http://192.168.86.133/api/tasks
+```
+
+提交测试任务：
+
+```powershell
+$body = @{ prompt = "测试企业 AI 异步任务" } | ConvertTo-Json
+$task = Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/tasks -ContentType "application/json" -Body $body
+$task
+Start-Sleep -Seconds 3
+Invoke-RestMethod "http://192.168.86.133/api/tasks/$($task.id)"
+```
+
+浏览器打开 `http://192.168.86.133/`，提交任务并观察 `queued → processing → completed`。
+
+## 5. 以后首次部署：一键脚本
+
+先完成第 3 节的三个配置文件。然后在 Windows PowerShell 复制脚本：
+
+```powershell
+scp "D:\LiZhen\StudyMaterials\AI-Platform\enterprise-ai-platform\deploy\scripts\bootstrap-deploy.sh" <虚拟机用户名>@192.168.86.133:/tmp/bootstrap-deploy.sh
+```
+
+在 Linux 虚拟机执行：
+
+```bash
 chmod +x /tmp/bootstrap-deploy.sh
-/tmp/bootstrap-deploy.sh agent/initial-project
+bash /tmp/bootstrap-deploy.sh agent/initial-project
 ```
 
-脚本会依次：
+它会克隆代码、验证外部配置、启动基础设施、初始化存储、执行迁移、构建应用、分阶段启动并验收。目标目录非空时脚本会停止，避免覆盖已有代码。
 
-1. 创建 `/opt/enterprise-ai-platform`。
-2. 创建仓库外配置目录 `/etc/enterprise-ai-platform`。
-3. 克隆指定 Git 分支。
-4. 检查现有 `/etc/enterprise-ai-platform/database.env` 是否可读，但不修改它。
-5. 构建前端、三套后端和 Nginx 所需镜像。
-6. 启动应用容器并验收页面、健康接口和查询接口。
+## 6. 后续更新脚本
 
-首次部署不会运行 `database/migrations/*.sql`。数据库结构必须在执行本节命令前准备完成。
-
-首次部署完成后检查：
+全部在 Linux 虚拟机执行：
 
 ```bash
 cd /opt/enterprise-ai-platform
-docker compose -f deploy/docker-compose.yml ps
+```
+
+| 更新范围 | 命令 |
+| --- | --- |
+| React | `bash ./deploy/scripts/update-frontend.sh` |
+| NestJS | `bash ./deploy/scripts/update-nest.sh` |
+| FastAPI | `bash ./deploy/scripts/update-fastapi.sh` |
+| Gin | `bash ./deploy/scripts/update-gin.sh` |
+| Worker | `bash ./deploy/scripts/update-worker.sh` |
+| 四个后端应用 | `bash ./deploy/scripts/update-backends.sh` |
+| Nginx | `bash ./deploy/scripts/update-nginx.sh` |
+| 多个指定服务 | `bash ./deploy/scripts/update-services.sh nest-service worker` |
+| 全部应用 | `bash ./deploy/scripts/update-all.sh` |
+
+脚本会先检查 Git 工作区，再执行 `fetch` 和 `pull --ff-only`。存在本地改动时会停止，不会覆盖。NestJS 或 Worker 更新前会执行数据库迁移；基础设施配置发生变化时应执行全量更新并人工核对数据兼容性。
+
+## 7. 状态、日志和验收
+
+```bash
+cd /opt/enterprise-ai-platform
+bash ./deploy/scripts/status.sh
 bash ./deploy/scripts/verify.sh
+bash ./deploy/scripts/logs.sh
 ```
 
-## 4. 后续独立更新脚本
-
-以下脚本都会先检查工作区、从 Git 拉取 `/etc/enterprise-ai-platform/deploy.env` 中配置的分支，并使用 `git pull --ff-only`。仓库存在本地修改时会立即停止，不会覆盖文件。
+持续查看一个服务，按 `Ctrl+C` 退出：
 
 ```bash
-cd /opt/enterprise-ai-platform
+bash ./deploy/scripts/logs.sh nest-service
+bash ./deploy/scripts/logs.sh worker
+bash ./deploy/scripts/logs.sh rabbitmq
+bash ./deploy/scripts/logs.sh fastapi-service
 ```
 
-只更新前端：
+## 8. 切换外部 PostgreSQL
+
+先备份配置：
 
 ```bash
-bash ./deploy/scripts/update-frontend.sh
+cp /etc/enterprise-ai-platform/database.env /etc/enterprise-ai-platform/database.env.bak
+cp /etc/enterprise-ai-platform/deploy.env /etc/enterprise-ai-platform/deploy.env.bak
 ```
 
-一次拉取并更新三套后端，但不重建前端：
-
-```bash
-bash ./deploy/scripts/update-backends.sh
-```
-
-只更新 FastAPI：
-
-```bash
-bash ./deploy/scripts/update-fastapi.sh
-```
-
-只更新 Gin：
-
-```bash
-bash ./deploy/scripts/update-gin.sh
-```
-
-只更新 NestJS：
-
-```bash
-bash ./deploy/scripts/update-nest.sh
-```
-
-显式指定其他分支时，把分支名作为第一个参数：
-
-```bash
-bash ./deploy/scripts/update-frontend.sh master
-bash ./deploy/scripts/update-backends.sh master
-```
-
-公共 Compose、Dockerfile、迁移或多个基础配置变化时执行全量更新：
-
-```bash
-bash ./deploy/scripts/update-all.sh
-```
-
-同时更新多个组件：
-
-```bash
-bash ./deploy/scripts/update-services.sh frontend fastapi-service
-bash ./deploy/scripts/update-services.sh --branch master gin-service nest-service
-```
-
-单组件脚本只构建并重建目标容器，不重建其他业务容器；`update-backends.sh` 只重建三套后端；三套后端更新前会先执行幂等数据库迁移。Nginx 会被快速重启一次，以刷新重建后容器的地址。
-
-## 5. 更换数据库
-
-先备份并修改仓库外配置：
-
-```bash
-cp /etc/enterprise-ai-platform/database.env \
-  /etc/enterprise-ai-platform/database.env.bak.$(date +%Y%m%d%H%M%S)
-vi /etc/enterprise-ai-platform/database.env
-```
-
-确认新数据库已经创建并授权后，执行：
+修改 `database.env` 为外部数据库地址，再把 `deploy.env` 的 `DATABASE_MODE` 改成 `external`。执行：
 
 ```bash
 cd /opt/enterprise-ai-platform
 bash ./deploy/scripts/apply-database-config.sh
 ```
 
-该脚本会在新数据库执行迁移，只重建三套后端并验收，不重建 React 前端。若失败，恢复备份配置后再次执行同一脚本。
-
-## 6. 验收
-
-虚拟机内：
+确认 NestJS 和 Worker 正常后，才可以停止旧 PostgreSQL：
 
 ```bash
-bash /opt/enterprise-ai-platform/deploy/scripts/verify.sh
+docker compose -f deploy/docker-compose.yml --profile managed-db stop postgres
 ```
 
-Windows PowerShell：
+不要删除旧数据卷，直到完成备份和切换验收。
 
-```powershell
-Test-NetConnection 192.168.86.133 -Port 80
-Invoke-WebRequest http://192.168.86.133/
-Invoke-RestMethod http://192.168.86.133/healthz
-Invoke-RestMethod http://192.168.86.133/api/fastapi/health
-Invoke-RestMethod http://192.168.86.133/api/gin/health
-Invoke-RestMethod http://192.168.86.133/api/nest/health
-Invoke-RestMethod http://192.168.86.133/api/fastapi/items
-Invoke-RestMethod http://192.168.86.133/api/gin/items
-Invoke-RestMethod http://192.168.86.133/api/nest/items
-```
-
-## 7. 状态、日志和回滚
+## 9. 回滚与数据安全
 
 ```bash
 cd /opt/enterprise-ai-platform
-docker compose -f deploy/docker-compose.yml ps -a
-docker compose -f deploy/docker-compose.yml logs --tail=200
-docker compose -f deploy/docker-compose.yml logs -f --tail=100 fastapi-service
-```
-
-更新脚本会把更新前提交记录到 `~/.local/state/enterprise-ai-platform/previous_commit`。回滚最近一次更新：
-
-```bash
 bash ./deploy/scripts/rollback.sh
 ```
 
-或回滚到指定提交：
+也可指定提交：
 
 ```bash
 bash ./deploy/scripts/rollback.sh <commit-id>
 ```
 
-回滚后处于 detached HEAD。修复完成后执行对应分支的全量更新脚本恢复。
+回滚只处理代码和应用镜像，不回滚 PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 数据。跨越本次架构重构之前的提交不兼容，应从本架构第一个稳定提交开始作为回滚基线。
 
-## 8. 重要注意事项
+严禁执行：
 
-- 不要删除 `/etc/enterprise-ai-platform`，除非确定不再需要当前数据库配置。
-- 不要把 `database.env`、密码、令牌或私钥复制进仓库。
-- 不要在 Windows 宿主机运行本文中的 Docker 命令。
-- 更新脚本不会自动清理镜像或卷，避免误删数据库数据。
-- 当前每个服务只有一个容器，重建期间会有短暂不可用。
-- 数据库迁移必须保持向后兼容，否则代码回滚可能无法读取新结构。
+```text
+docker compose down -v
+docker volume prune
+```
+
+这些命令可能删除数据库、队列、向量和对象存储数据。

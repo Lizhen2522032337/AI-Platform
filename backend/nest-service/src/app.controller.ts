@@ -7,7 +7,7 @@ export class AppController {
 
   // 处理根路径请求并返回服务的默认欢迎信息。
   @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  getInfo(): Record<string, string> {
+    return this.appService.getInfo();
   }
 }

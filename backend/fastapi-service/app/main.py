@@ -1,29 +1,51 @@
-"""FastAPI 服务入口。"""
+"""FastAPI AI 服务入口。"""
 
 from fastapi import FastAPI
-from fastapi.exceptions import RequestValidationError
-from sqlalchemy.exc import SQLAlchemyError
+from pydantic import BaseModel, Field
 
-from app.errors import (
-    APIError,
-    api_error_handler,
-    database_error_handler,
-    validation_error_handler,
-)
-from app.routers.items import router as items_router
+from app.integrations import check_integrations, process_prompt
 
 
-# 创建 FastAPI 应用实例，供 Uvicorn 加载。
-app = FastAPI()
-app.add_exception_handler(APIError, api_error_handler)
-app.add_exception_handler(RequestValidationError, validation_error_handler)
-app.add_exception_handler(SQLAlchemyError, database_error_handler)
-app.include_router(items_router)
+class ProcessRequest(BaseModel):
+    """Worker 调用 AI 服务时提交的任务。"""
+
+    task_id: int = Field(alias="taskId", gt=0)
+    prompt: str = Field(min_length=1, max_length=4000)
+
+
+class ProcessResponse(BaseModel):
+    """AI 服务返回给 Worker 的处理结果。"""
+
+    task_id: int = Field(alias="taskId")
+    text: str
+    vector_id: str = Field(alias="vectorId")
+    object_key: str = Field(alias="objectKey")
+
+
+app = FastAPI(title="Enterprise AI Service", version="1.0.0")
 
 
 @app.get("/")
-def root():
-    """返回服务运行状态。"""
+def root() -> dict[str, str]:
+    """返回服务角色。"""
+
+    return {"service": "fastapi-service", "role": "ai-service", "status": "running"}
+
+
+@app.get("/health")
+def health() -> dict[str, object]:
+    """检查 AI 服务以及 Qdrant、MinIO。"""
+
+    check_integrations()
     return {
-        "message": "FastAPI running"
+        "status": "ok",
+        "service": "fastapi-service",
+        "dependencies": {"qdrant": "ok", "minio": "ok"},
     }
+
+
+@app.post("/process", response_model=ProcessResponse)
+def process(payload: ProcessRequest) -> dict[str, object]:
+    """供 Worker 内部调用的 AI 处理接口。"""
+
+    return process_prompt(payload.task_id, payload.prompt)

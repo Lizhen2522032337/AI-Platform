@@ -3,8 +3,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthController } from './health.controller';
-import { Item } from './items/item.entity';
-import { ItemsModule } from './items/items.module';
+import { InfrastructureModule } from './infrastructure/infrastructure.module';
+import { AiTask } from './tasks/task.entity';
+import { TasksModule } from './tasks/tasks.module';
 
 function requiredPassword(): string {
   const password = process.env.POSTGRES_PASSWORD;
@@ -28,12 +29,13 @@ function requiredPassword(): string {
         (process.env.POSTGRES_SSLMODE ?? 'disable') === 'disable'
           ? false
           : { rejectUnauthorized: false },
-      entities: [Item],
+      entities: [AiTask],
       synchronize: false,
       retryAttempts: 5,
       retryDelay: 2000,
     }),
-    ItemsModule,
+    InfrastructureModule,
+    TasksModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

@@ -1,6 +1,118 @@
 name: enterprise-ai-platform
 
 services:
+  # PostgreSQL 可以由本项目托管，也可以通过 database.env 切换为外部数据库。
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["managed-db"]
+    restart: unless-stopped
+    env_file:
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file:
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:4.3.4-management-alpine
+    restart: unless-stopped
+    env_file:
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    expose:
+      - "6333"
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    restart: unless-stopped
+    env_file:
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    expose:
+      - "9000"
+
+  # 一次性创建 AI 结果桶，完成后正常退出。
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
+    profiles: ["tools"]
+    env_file:
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      until mc alias set local "http://$${MINIO_ENDPOINT}" "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
+        echo "等待 MinIO 就绪"
+        sleep 2
+      done
+      mc mb --ignore-existing "local/$${MINIO_BUCKET}"
+
+  # 一次性执行所有幂等 SQL 迁移。
+  migrator:
+    image: postgres:16-alpine
+    profiles: ["tools"]
+    env_file:
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../database/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      export PGHOST="$${POSTGRES_HOST}"
+      export PGPORT="$${POSTGRES_PORT:-5432}"
+      export PGDATABASE="$${POSTGRES_DB}"
+      export PGUSER="$${POSTGRES_USER}"
+      export PGPASSWORD="$${POSTGRES_PASSWORD}"
+      export PGSSLMODE="$${POSTGRES_SSLMODE:-disable}"
+      attempt=1
+      until pg_isready >/dev/null 2>&1; do
+        if [ "$${attempt}" -ge 30 ]; then echo "等待 PostgreSQL 就绪超时" >&2; exit 1; fi
+        echo "等待 PostgreSQL 就绪（$${attempt}/30）"
+        attempt=$$((attempt + 1))
+        sleep 2
+      done
+      for migration in /migrations/*.sql; do
+        [ -f "$${migration}" ] || continue
+        echo "执行迁移：$$(basename "$${migration}")"
+        psql -v ON_ERROR_STOP=1 -f "$${migration}"
+      done
+
   frontend:
     build:
       context: ../frontend
@@ -21,40 +133,19 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    depends_on:
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
     expose:
       - "8000"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
-        ]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  gin-service:
-    build:
-      context: ../backend/gin-service
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    env_file:
-      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    expose:
-      - "8080"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+      retries: 20
       start_period: 20s
 
   nest-service:
@@ -64,21 +155,68 @@ services:
     restart: unless-stopped
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      fastapi-service:
+        condition: service_healthy
     expose:
       - "3000"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
-        ]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 20
+      start_period: 30s
+
+  gin-service:
+    build:
+      context: ../backend/gin-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    depends_on:
+      redis:
+        condition: service_healthy
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  worker:
+    build:
+      context: ../backend/worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
+      - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      fastapi-service:
+        condition: service_healthy
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
       start_period: 20s
 
   nginx:
@@ -87,11 +225,9 @@ services:
     depends_on:
       frontend:
         condition: service_healthy
-      fastapi-service:
+      nest-service:
         condition: service_healthy
       gin-service:
-        condition: service_healthy
-      nest-service:
         condition: service_healthy
     ports:
       - "80:80"
@@ -103,3 +239,10 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  qdrant_data:
+  minio_data:

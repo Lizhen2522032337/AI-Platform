@@ -15,6 +15,9 @@ FROM alpine
 
 WORKDIR /app
 
+# HTTPS/时区证书由基础包提供；健康检查使用 BusyBox wget。
+RUN apk add --no-cache ca-certificates
+
 COPY --from=build /app/server ./
 
 EXPOSE 8080

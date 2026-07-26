@@ -5,5 +5,6 @@ set -Eeuo pipefail
 readonly CURRENT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${CURRENT_DIR}/lib/common.sh"
+acquire_deploy_lock
 pull_code "${1:-}"
 update_one_service gin-service
