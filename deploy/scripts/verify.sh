@@ -13,6 +13,7 @@ main() {
     ensure_database_env
     compose ps
 
+    wait_http 'http://127.0.0.1/healthz' 'Nginx 统一健康检查'
     wait_http 'http://127.0.0.1/' 'React 前端'
     wait_http 'http://127.0.0.1/api/fastapi/health' 'FastAPI 健康检查'
     wait_http 'http://127.0.0.1/api/gin/health' 'Gin 健康检查'
