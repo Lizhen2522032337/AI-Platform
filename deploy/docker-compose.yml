@@ -6,6 +6,8 @@ services:
     image: postgres:16-alpine
     profiles: ["managed-db"]
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
     volumes:
