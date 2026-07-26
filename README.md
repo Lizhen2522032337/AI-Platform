@@ -34,9 +34,10 @@ chmod +x /tmp/bootstrap-deploy.sh
 ```bash
 cd /opt/enterprise-ai-platform
 bash ./deploy/scripts/update-frontend.sh
+bash ./deploy/scripts/update-backends.sh
 bash ./deploy/scripts/update-fastapi.sh
 bash ./deploy/scripts/update-gin.sh
 bash ./deploy/scripts/update-nest.sh
 ```
 
-这些更新脚本会先安全拉取 Git，再只重建目标服务。
+这些更新脚本会先安全拉取 Git，再只重建目标服务；`update-backends.sh` 会一次性更新三套后端但不重建前端。

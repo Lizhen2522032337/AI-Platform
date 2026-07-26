@@ -134,6 +134,12 @@ cd /opt/enterprise-ai-platform
 bash ./deploy/scripts/update-frontend.sh
 ```
 
+一次拉取并更新三套后端，但不重建前端：
+
+```bash
+bash ./deploy/scripts/update-backends.sh
+```
+
 只更新 FastAPI：
 
 ```bash
@@ -156,6 +162,7 @@ bash ./deploy/scripts/update-nest.sh
 
 ```bash
 bash ./deploy/scripts/update-frontend.sh master
+bash ./deploy/scripts/update-backends.sh master
 ```
 
 公共 Compose、Dockerfile、迁移或多个基础配置变化时执行全量更新：
@@ -171,7 +178,7 @@ bash ./deploy/scripts/update-services.sh frontend fastapi-service
 bash ./deploy/scripts/update-services.sh --branch master gin-service nest-service
 ```
 
-单组件脚本只构建并重建目标容器，不重建其他业务容器；三套后端更新前会先执行幂等数据库迁移。Nginx 会被快速重启一次，以刷新重建后容器的地址。
+单组件脚本只构建并重建目标容器，不重建其他业务容器；`update-backends.sh` 只重建三套后端；三套后端更新前会先执行幂等数据库迁移。Nginx 会被快速重启一次，以刷新重建后容器的地址。
 
 ## 5. 更换数据库
 
@@ -205,6 +212,7 @@ Windows PowerShell：
 ```powershell
 Test-NetConnection 192.168.86.133 -Port 80
 Invoke-WebRequest http://192.168.86.133/
+Invoke-RestMethod http://192.168.86.133/healthz
 Invoke-RestMethod http://192.168.86.133/api/fastapi/health
 Invoke-RestMethod http://192.168.86.133/api/gin/health
 Invoke-RestMethod http://192.168.86.133/api/nest/health
