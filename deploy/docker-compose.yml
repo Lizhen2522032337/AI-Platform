@@ -74,13 +74,15 @@ services:
     depends_on:
       minio:
         condition: service_started
+    # command 使用单元素列表，确保整段脚本作为 sh -c 的一个参数传入。
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      until mc alias set local "http://$${MINIO_ENDPOINT}" "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
-        echo "等待 MinIO 就绪"
-        sleep 2
-      done
-      mc mb --ignore-existing "local/$${MINIO_BUCKET}"
+    command:
+      - |
+        until mc alias set local "http://$${MINIO_ENDPOINT}" "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
+          echo "等待 MinIO 就绪"
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$${MINIO_BUCKET}"
 
   # 一次性执行所有幂等 SQL 迁移。
   migrator:
@@ -92,26 +94,28 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ../database/migrations:/migrations:ro
+    # command 使用单元素列表，避免 Compose 将多行脚本拆成多个 shell 参数。
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      export PGHOST="$${POSTGRES_HOST}"
-      export PGPORT="$${POSTGRES_PORT:-5432}"
-      export PGDATABASE="$${POSTGRES_DB}"
-      export PGUSER="$${POSTGRES_USER}"
-      export PGPASSWORD="$${POSTGRES_PASSWORD}"
-      export PGSSLMODE="$${POSTGRES_SSLMODE:-disable}"
-      attempt=1
-      until pg_isready >/dev/null 2>&1; do
-        if [ "$${attempt}" -ge 30 ]; then echo "等待 PostgreSQL 就绪超时" >&2; exit 1; fi
-        echo "等待 PostgreSQL 就绪（$${attempt}/30）"
-        attempt=$$((attempt + 1))
-        sleep 2
-      done
-      for migration in /migrations/*.sql; do
-        [ -f "$${migration}" ] || continue
-        echo "执行迁移：$$(basename "$${migration}")"
-        psql -v ON_ERROR_STOP=1 -f "$${migration}"
-      done
+    command:
+      - |
+        export PGHOST="$${POSTGRES_HOST}"
+        export PGPORT="$${POSTGRES_PORT:-5432}"
+        export PGDATABASE="$${POSTGRES_DB}"
+        export PGUSER="$${POSTGRES_USER}"
+        export PGPASSWORD="$${POSTGRES_PASSWORD}"
+        export PGSSLMODE="$${POSTGRES_SSLMODE:-disable}"
+        attempt=1
+        until pg_isready >/dev/null 2>&1; do
+          if [ "$${attempt}" -ge 30 ]; then echo "等待 PostgreSQL 就绪超时" >&2; exit 1; fi
+          echo "等待 PostgreSQL 就绪（$${attempt}/30）"
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
+        for migration in /migrations/*.sql; do
+          [ -f "$${migration}" ] || continue
+          echo "执行迁移：$$(basename "$${migration}")"
+          psql -v ON_ERROR_STOP=1 -f "$${migration}"
+        done
 
   frontend:
     build:

@@ -36,4 +36,6 @@ export const tasksApi = {
       body: JSON.stringify({ prompt }),
     }),
   eventsUrl: (taskId: number) => `/realtime/events/${taskId}`,
+
 }
+  console.log('tasksApi', tasksApi)
