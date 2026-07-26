@@ -1,0 +1,38 @@
+# 数据库真实配置固定保存在虚拟机 /etc/enterprise-ai-platform，不进入仓库。
+# 兼容旧部署产生的仓库内文件，防止误提交凭据与状态。
+deploy/.env
+deploy/.state/
+
+# 所有真实环境文件与私钥均不得提交；示例配置可以进入仓库。
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# 常见本地依赖、缓存和构建产物。
+node_modules/
+dist/
+build/
+coverage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# 本地编辑器、系统文件与发布产物。
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+release-output/
+*.tar
+*.tar.gz
+*.sha256
