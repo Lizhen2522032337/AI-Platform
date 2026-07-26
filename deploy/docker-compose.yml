@@ -7,7 +7,7 @@ services:
     profiles: ["managed-db"]
     restart: unless-stopped
     expose:
-      - "80"
+      - "5432"
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
     volumes:
