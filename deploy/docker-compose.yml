@@ -22,6 +22,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    ports:
+      - "6379:6379"
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
     command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
