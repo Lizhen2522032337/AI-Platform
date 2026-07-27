@@ -17,7 +17,8 @@ main() {
     start_infrastructure
     run_migrations
     compose config --quiet
-    compose build --pull "${APPLICATION_SERVICES[@]}"
+    # 日常更新复用已缓存的基础镜像；首次部署才强制检查基础镜像更新。
+    compose build "${APPLICATION_SERVICES[@]}"
     compose up -d "${APPLICATION_SERVICES[@]}"
     for service in "${APPLICATION_SERVICES[@]}"; do
         wait_for_healthy "${service}"

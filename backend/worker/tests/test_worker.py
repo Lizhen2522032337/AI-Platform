@@ -30,8 +30,12 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
         },
     )
 
-    main.process_message(json.dumps({"id": 9, "prompt": "测试"}).encode())
+    main.process_message(
+        json.dumps({"id": 9, "ownerId": 3, "prompt": "测试"}).encode()
+    )
 
     assert database_updates == [(9, "processing"), (9, "completed")]
     assert redis_updates[0]["status"] == "processing"
+    assert redis_updates[0]["ownerId"] == 3
     assert redis_updates[-1]["status"] == "completed"
+    assert redis_updates[-1]["ownerId"] == 3

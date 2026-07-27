@@ -6,6 +6,11 @@ import { HealthController } from './health.controller';
 import { InfrastructureModule } from './infrastructure/infrastructure.module';
 import { AiTask } from './tasks/task.entity';
 import { TasksModule } from './tasks/tasks.module';
+import { AuthModule } from './auth/auth.module';
+import { Permission } from './users/permission.entity';
+import { Role } from './users/role.entity';
+import { AppUser } from './users/user.entity';
+import { UsersModule } from './users/users.module';
 
 function requiredPassword(): string {
   const password = process.env.POSTGRES_PASSWORD;
@@ -29,12 +34,14 @@ function requiredPassword(): string {
         (process.env.POSTGRES_SSLMODE ?? 'disable') === 'disable'
           ? false
           : { rejectUnauthorized: false },
-      entities: [AiTask],
+      entities: [AiTask, AppUser, Role, Permission],
       synchronize: false,
       retryAttempts: 5,
       retryDelay: 2000,
     }),
     InfrastructureModule,
+    UsersModule,
+    AuthModule,
     TasksModule,
   ],
   controllers: [AppController, HealthController],

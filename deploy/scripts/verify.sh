@@ -18,7 +18,6 @@ main() {
     wait_http 'http://127.0.0.1/healthz' 'Nginx 统一健康检查'
     wait_http 'http://127.0.0.1/' 'React 前端'
     wait_http 'http://127.0.0.1/api/health' 'NestJS 核心后端'
-    wait_http 'http://127.0.0.1/api/tasks' 'NestJS 任务查询'
     wait_http 'http://127.0.0.1/realtime/health' 'Gin 实时服务'
     verify_service fastapi-service
     verify_service worker

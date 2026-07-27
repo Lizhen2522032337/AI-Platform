@@ -115,14 +115,28 @@ def process_message(body: bytes) -> None:
 
     message = json.loads(body.decode("utf-8"))
     task_id = int(message["id"])
+    # 兼容认证功能上线前已经进入队列的旧消息；0 表示无归属，仅管理员可查看。
+    owner_id = int(message.get("ownerId") or 0)
     prompt = str(message["prompt"])
-    processing_state = {"id": task_id, "status": "processing"}
+    processing_state = {
+        "id": task_id,
+        "ownerId": owner_id,
+        "status": "processing",
+    }
     update_task(task_id, "processing")
     save_state(task_id, processing_state)
 
     result = call_ai_service(task_id, prompt)
     update_task(task_id, "completed", result=result)
-    save_state(task_id, {"id": task_id, "status": "completed", "result": result})
+    save_state(
+        task_id,
+        {
+            "id": task_id,
+            "ownerId": owner_id,
+            "status": "completed",
+            "result": result,
+        },
+    )
     logger.info("task completed: %s", task_id)
 
 
@@ -188,19 +202,27 @@ def consume() -> None:
         body: bytes,
     ) -> None:
         task_id: int | None = None
+        owner_id: int | None = None
         try:
-            task_id = int(json.loads(body.decode("utf-8"))["id"])
+            decoded = json.loads(body.decode("utf-8"))
+            task_id = int(decoded["id"])
+            owner_id = int(decoded.get("ownerId") or 0)
             process_message(body)
             current_channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as error:  # noqa: BLE001
             logger.exception("task failed")
             try:
-                if task_id is not None:
+                if task_id is not None and owner_id is not None:
                     message = str(error)[:2000]
                     update_task(task_id, "failed", error_message=message)
                     save_state(
                         task_id,
-                        {"id": task_id, "status": "failed", "errorMessage": message},
+                        {
+                            "id": task_id,
+                            "ownerId": owner_id,
+                            "status": "failed",
+                            "errorMessage": message,
+                        },
                     )
                 current_channel.basic_ack(delivery_tag=method.delivery_tag)
             except Exception:  # noqa: BLE001

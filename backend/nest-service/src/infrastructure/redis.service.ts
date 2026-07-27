@@ -31,4 +31,29 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async setTaskState(taskId: number, value: unknown): Promise<void> {
     await this.client.set(`task:${taskId}`, JSON.stringify(value), { EX: 86400 });
   }
+
+  async recordLoginFailure(key: string, ttlSeconds: number): Promise<number> {
+    const redisKey = `auth:login-failures:${key}`;
+    const count = await this.client.incr(redisKey);
+    if (count === 1) await this.client.expire(redisKey, ttlSeconds);
+    return count;
+  }
+
+  async loginFailureCount(key: string): Promise<number> {
+    return Number((await this.client.get(`auth:login-failures:${key}`)) ?? 0);
+  }
+
+  async clearLoginFailures(key: string): Promise<void> {
+    await this.client.del(`auth:login-failures:${key}`);
+  }
+
+  async setAuthTokenVersion(
+    userId: number,
+    version: number,
+    ttlSeconds = 86400,
+  ): Promise<void> {
+    await this.client.set(`auth:user:${userId}:version`, String(version), {
+      EX: ttlSeconds,
+    });
+  }
 }

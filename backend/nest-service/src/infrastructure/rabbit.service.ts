@@ -3,6 +3,7 @@ import * as amqp from 'amqplib';
 
 export interface AiTaskMessage {
   id: number;
+  ownerId: number;
   prompt: string;
   createdAt: string;
 }

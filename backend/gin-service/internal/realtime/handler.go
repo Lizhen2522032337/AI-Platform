@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"gin-service/internal/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -50,11 +51,13 @@ func NewHandler(store Store) *Handler {
 }
 
 // RegisterRoutes 注册 Gin 实时服务路由。
-func (h *Handler) RegisterRoutes(router *gin.Engine) {
+func (h *Handler) RegisterRoutes(router *gin.Engine, middleware ...gin.HandlerFunc) {
 	router.GET("/", h.root)
 	router.GET("/health", h.health)
-	router.GET("/events/:id/current", h.current)
-	router.GET("/events/:id", h.events)
+	events := router.Group("/events")
+	events.Use(middleware...)
+	events.GET("/:id/current", h.current)
+	events.GET("/:id", h.events)
 }
 
 func (h *Handler) root(c *gin.Context) {
@@ -98,7 +101,11 @@ func (h *Handler) current(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "REDIS_ERROR", "message": "task state unavailable"}})
 		return
 	}
-	c.Data(http.StatusOK, "application/json; charset=utf-8", []byte(value))
+	payload, ok := authorizedPayload(c, value)
+	if !ok {
+		return
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", payload)
 }
 
 func (h *Handler) events(c *gin.Context) {
@@ -121,9 +128,16 @@ func (h *Handler) events(c *gin.Context) {
 	defer ticker.Stop()
 
 	for {
+		if !auth.SessionValid(c) {
+			return
+		}
 		value, err := h.store.Get(c.Request.Context(), key)
 		if err == nil && value != lastValue {
-			_, _ = fmt.Fprintf(c.Writer, "event: task\ndata: %s\n\n", value)
+			payload, allowed := authorizedPayload(c, value)
+			if !allowed {
+				return
+			}
+			_, _ = fmt.Fprintf(c.Writer, "event: task\ndata: %s\n\n", payload)
 			flusher.Flush()
 			lastValue = value
 			var state struct {
@@ -139,4 +153,28 @@ func (h *Handler) events(c *gin.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func authorizedPayload(c *gin.Context, value string) ([]byte, bool) {
+	var state map[string]any
+	if err := json.Unmarshal([]byte(value), &state); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+			"code": "STATE_ERROR", "message": "task state unavailable",
+		}})
+		return nil, false
+	}
+	ownerValue, _ := state["ownerId"].(float64)
+	if !auth.CanReadTask(c, int(ownerValue)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+			"code": "FORBIDDEN", "message": "task access denied",
+		}})
+		return nil, false
+	}
+	delete(state, "ownerId")
+	payload, err := json.Marshal(state)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return nil, false
+	}
+	return payload, true
 }

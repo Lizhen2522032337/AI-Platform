@@ -4,6 +4,16 @@ import type { RabbitService } from '../infrastructure/rabbit.service';
 import type { RedisService } from '../infrastructure/redis.service';
 import { AiTask } from './task.entity';
 import { TasksService } from './tasks.service';
+import type { AuthenticatedUser } from '../auth/auth.types';
+
+const user: AuthenticatedUser = {
+  id: 7,
+  username: 'tester',
+  displayName: '测试用户',
+  role: 'user',
+  permissions: ['tasks:create', 'tasks:read:own'],
+  tokenVersion: 1,
+};
 
 function sampleTask(): AiTask {
   return {
@@ -14,6 +24,7 @@ function sampleTask(): AiTask {
     errorMessage: null,
     objectKey: null,
     vectorId: null,
+    createdById: 7,
     createdAt: new Date('2026-07-26T00:00:00.000Z'),
     updatedAt: new Date('2026-07-26T00:00:00.000Z'),
   };
@@ -45,19 +56,25 @@ describe('TasksService', () => {
     repository.create.mockReturnValue(task);
     repository.save.mockResolvedValue(task);
 
-    await expect(service.create({ prompt: task.prompt })).resolves.toEqual(task);
+    await expect(service.create({ prompt: task.prompt }, user)).resolves.toEqual(task);
     expect(rabbitService.publishTask).toHaveBeenCalledWith({
       id: 1,
+      ownerId: 7,
       prompt: task.prompt,
       createdAt: '2026-07-26T00:00:00.000Z',
     });
-    expect(redisService.setTaskState).toHaveBeenCalledWith(1, task);
+    expect(redisService.setTaskState).toHaveBeenCalledWith(1, {
+      id: 1,
+      ownerId: 7,
+      status: 'queued',
+    });
   });
 
   it('returns tasks newest first', async () => {
     repository.find.mockResolvedValue([sampleTask()]);
-    await expect(service.findAll()).resolves.toHaveLength(1);
+    await expect(service.findAll(user)).resolves.toHaveLength(1);
     expect(repository.find).toHaveBeenCalledWith({
+      where: { createdById: 7 },
       order: { id: 'DESC' },
       take: 100,
     });
@@ -65,6 +82,6 @@ describe('TasksService', () => {
 
   it('throws 404 when a task does not exist', async () => {
     repository.findOneBy.mockResolvedValue(null);
-    await expect(service.findOne(999)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.findOne(999, user)).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"gin-service/internal/auth"
 	"gin-service/internal/config"
 	"gin-service/internal/realtime"
 	"github.com/gin-gonic/gin"
@@ -35,7 +36,14 @@ func main() {
 	}
 
 	router := gin.Default()
-	realtime.NewHandler(realtime.NewRedisStore(redisClient)).RegisterRoutes(router)
+	authenticator := auth.New(
+		cfg.JWTSecret,
+		cfg.JWTIssuer,
+		cfg.JWTAudience,
+		cfg.JWTCookieName,
+		auth.NewRedisVersionStore(redisClient),
+	)
+	realtime.NewHandler(realtime.NewRedisStore(redisClient)).RegisterRoutes(router, authenticator.Require())
 	server := &http.Server{
 		Addr:              ":8080",
 		Handler:           router,

@@ -10,7 +10,7 @@ React
 Nginx :80
   |------------------------------|
   | /api                         | /realtime
-NestJS Backend                 Gin Realtime
+NestJS Auth + Backend          Gin Auth + Realtime
   |        |                       |
   |        +--> FastAPI AI         +--> Redis
   |
@@ -24,7 +24,7 @@ NestJS Backend                 Gin Realtime
                            +--> Redis
 ```
 
-Gin 没有遗漏，也不再复制 NestJS 的 CRUD。它负责 SSE 实时状态，适合 Go 长连接并发模型；NestJS 是唯一核心业务入口；FastAPI 专注 Python AI 生态；Worker 隔离耗时任务。
+Gin 没有遗漏，也不再复制 NestJS 的 CRUD。它负责验证共享 JWT、校验任务归属和提供 SSE 实时状态；NestJS 是唯一认证、权限和核心业务入口；FastAPI 专注 Python AI 生态；Worker 隔离耗时任务。
 
 ## 2. 目录
 
@@ -34,8 +34,10 @@ enterprise-ai-platform/
 ├── backend/
 │   ├── nest-service/
 │   │   └── src/
+│   │       ├── auth/               JWT、Cookie、全局认证与权限 Guard
 │   │       ├── infrastructure/     RabbitMQ、Redis 客户端
-│   │       └── tasks/              任务业务模块
+│   │       ├── tasks/              带用户归属的任务业务模块
+│   │       └── users/              用户、角色和权限管理
 │   ├── fastapi-service/
 │   │   └── app/
 │   │       ├── config/             AI 服务配置
@@ -60,20 +62,20 @@ enterprise-ai-platform/
 
 ## 3. 一次任务的完整流程
 
-1. React 向 `POST /api/tasks` 提交 prompt。
-2. Nginx 把请求转给 NestJS。
-3. NestJS 在 PostgreSQL 创建 `queued` 任务。
+1. React 通过 NestJS 登录；浏览器得到一小时 HttpOnly JWT Cookie。
+2. React 向 `POST /api/tasks` 提交 prompt，Nginx 转给 NestJS。
+3. NestJS 验证 JWT 和 `tasks:create` 权限，在 PostgreSQL 创建带 `created_by` 的 `queued` 任务。
 4. NestJS 把持久化消息写入 RabbitMQ quorum queue。
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
 6. Worker 调用 FastAPI `/process`。
 7. FastAPI 写入 Qdrant 向量和 MinIO JSON 结果。
 8. Worker 把结果写回 PostgreSQL，并把 `completed` 状态写入 Redis。
-9. Gin 从 Redis 读取新状态，通过 SSE 推送给 React。
+9. Gin 验证 JWT、token 版本和 Redis 中的 `ownerId`，再通过 SSE 推送给 React。
 
 ## 4. 数据和端口边界
 
-- 宿主机只发布 Nginx 的 TCP 80。
-- PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO、NestJS、FastAPI、Gin、Worker 均只在 Compose 网络通信。
+- Nginx 向局域网发布 TCP 80；PostgreSQL 可选仅绑定宿主机 `127.0.0.1:5432` 供 SSH 隧道使用。
+- Redis、RabbitMQ、Qdrant、MinIO、NestJS、FastAPI、Gin、Worker 均只在 Compose 网络通信。
 - PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 使用独立 Docker 具名卷。
 - 真实配置全部位于 `/etc/enterprise-ai-platform`，不写入 Git。
 - Docker Compose 更新应用时不得使用 `down -v`，避免删除数据卷。

@@ -31,6 +31,9 @@ export class AiTask {
   @Column({ name: 'vector_id', type: 'text', nullable: true })
   vectorId: string | null;
 
+  @Column({ name: 'created_by', type: 'integer', nullable: true })
+  createdById: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

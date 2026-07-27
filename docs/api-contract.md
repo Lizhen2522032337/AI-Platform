@@ -9,9 +9,43 @@
 | 方法 | 对外路径 | 成功状态 | 说明 |
 | --- | --- | ---: | --- |
 | GET | `/api/health` | 200 | 检查 PostgreSQL、Redis、RabbitMQ、FastAPI |
-| GET | `/api/tasks` | 200 | 查询最近 100 个任务 |
-| GET | `/api/tasks/:id` | 200 | 查询指定任务 |
-| POST | `/api/tasks` | 202 | 创建任务并投递 RabbitMQ |
+| POST | `/api/auth/login` | 200 | 用户名密码登录，返回角色、权限和 1 小时 JWT |
+| GET | `/api/auth/me` | 200 | 查询当前登录人 |
+| POST | `/api/auth/logout` | 204 | 清除登录 Cookie |
+| GET | `/api/tasks` | 200 | 管理员查全部，普通用户只查自己的最近 100 个任务 |
+| GET | `/api/tasks/:id` | 200 | 按任务归属校验后查询指定任务 |
+| POST | `/api/tasks` | 202 | 创建当前用户的任务并投递 RabbitMQ |
+| GET | `/api/users` | 200 | 管理员查询用户 |
+| POST | `/api/users` | 201 | 管理员创建用户 |
+| PATCH | `/api/users/:id` | 200 | 管理员修改角色、状态或密码 |
+
+登录请求：
+
+```json
+{
+  "username": "admin",
+  "password": "不会保存为明文的密码"
+}
+```
+
+登录响应同时设置 `HttpOnly; SameSite=Strict` Cookie：
+
+```json
+{
+  "accessToken": "eyJ...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "displayName": "系统管理员",
+    "role": "admin",
+    "permissions": ["tasks:create", "tasks:read:any", "users:manage", "users:read"]
+  }
+}
+```
+
+非浏览器客户端可使用 `Authorization: Bearer <accessToken>`。浏览器前端不持久化响应中的 token，而是使用 HttpOnly Cookie。
 
 创建请求：
 
@@ -32,6 +66,7 @@
   "errorMessage": null,
   "objectKey": null,
   "vectorId": null,
+  "createdById": 1,
   "createdAt": "2026-07-26T12:00:00.000Z",
   "updatedAt": "2026-07-26T12:00:00.000Z"
 }
@@ -46,6 +81,8 @@
 | GET | `/realtime/health` | 检查 Gin 和 Redis |
 | GET | `/realtime/events/:id/current` | 获取 Redis 中的当前任务状态 |
 | GET | `/realtime/events/:id` | 建立 SSE 长连接，状态结束后自动关闭 |
+
+两个事件接口都必须携带有效 JWT，并根据 `ownerId` 校验任务归属；`/realtime/health` 保持公开供容器健康检查使用。
 
 SSE 事件名为 `task`，数据示例：
 
@@ -92,6 +129,7 @@ data: {"id":12,"status":"processing"}
 ```json
 {
   "id": 12,
+  "ownerId": 1,
   "prompt": "总结设备巡检记录",
   "createdAt": "2026-07-26T12:00:00.000Z"
 }
@@ -110,4 +148,4 @@ data: {"id":12,"status":"processing"}
 }
 ```
 
-参数错误为 400，资源不存在为 404，依赖不可用为 503，未处理错误为 500。响应和日志不得包含数据库、中间件或对象存储密码。
+参数错误为 400，未登录或 token 过期为 401，权限不足为 403，资源不存在为 404，登录限流为 429，依赖不可用为 503，未处理错误为 500。响应和日志不得包含密码、JWT 密钥或其他基础设施凭据。

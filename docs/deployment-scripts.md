@@ -99,6 +99,13 @@ RABBITMQ_TASK_QUEUE=ai_tasks
 
 AI_SERVICE_URL=http://fastapi-service:8000
 
+JWT_SECRET=替换成至少64位随机密钥
+JWT_ISSUER=enterprise-ai-platform
+JWT_AUDIENCE=enterprise-ai-platform-web
+JWT_COOKIE_NAME=eai_access
+JWT_EXPIRES_SECONDS=3600
+COOKIE_SECURE=false
+
 QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION=ai_task_vectors
 
@@ -110,6 +117,8 @@ MINIO_USE_SSL=false
 
 LOG_LEVEL=INFO
 ```
+
+可用 `openssl rand -hex 48` 生成 JWT 随机密钥。当前通过 HTTP 访问所以 `COOKIE_SECURE=false`；配置 HTTPS 后必须改为 `true`。
 
 ### 3.4 部署行为配置
 
@@ -133,7 +142,7 @@ PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
 ```bash
 ls -l /etc/enterprise-ai-platform
 grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
-grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/platform.env
+grep -v 'PASSWORD\|PASS=\|SECRET=' /etc/enterprise-ai-platform/platform.env
 cat /etc/enterprise-ai-platform/deploy.env
 ```
 
@@ -222,25 +231,34 @@ docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150
 docker compose -f deploy/docker-compose.yml --profile managed-db logs --tail=150 worker
 ```
 
-### 第 7 步：最后启动 Nginx
+### 第 7 步：创建首个管理员
+
+```bash
+bash ./deploy/scripts/create-admin.sh
+```
+
+按提示输入管理员用户名、显示名称和至少 12 位密码。密码静默输入，不会保存到 Git 或 shell 历史。
+
+### 第 8 步：最后启动 Nginx
 
 ```bash
 docker compose -f deploy/docker-compose.yml --profile managed-db up -d nginx
 docker compose -f deploy/docker-compose.yml --profile managed-db ps
 ```
 
-只有 Nginx 应显示宿主机端口 `0.0.0.0:80->80/tcp`。
+Nginx 应显示 `0.0.0.0:80->80/tcp`。如启用了 DataGrip SSH 隧道，PostgreSQL 还会显示仅本机可访问的 `127.0.0.1:5432->5432/tcp`。
 
-### 第 8 步：虚拟机内验收
+### 第 9 步：虚拟机内验收
 
 ```bash
 docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/healthz
 docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/api/health
-docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/api/tasks
 docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx wget -qO- http://127.0.0.1/realtime/health
 ```
 
-### 第 9 步：Windows 验收
+`/api/tasks` 和 `/realtime/events/*` 已受登录保护，匿名访问返回 401 是正确行为。
+
+### 第 10 步：Windows 验收
 
 在 Windows PowerShell 执行：
 
@@ -248,17 +266,27 @@ docker compose -f deploy/docker-compose.yml --profile managed-db exec -T nginx w
 Test-NetConnection 192.168.86.133 -Port 80
 Invoke-RestMethod http://192.168.86.133/healthz
 Invoke-RestMethod http://192.168.86.133/api/health
-Invoke-RestMethod http://192.168.86.133/api/tasks
 ```
 
-提交测试任务：
+登录并提交测试任务：
 
 ```powershell
+$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$securePassword = Read-Host "管理员密码" -AsSecureString
+$credential = [pscredential]::new("admin", $securePassword)
+$loginBody = @{
+  username = "admin"
+  password = $credential.GetNetworkCredential().Password
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/auth/login `
+  -WebSession $session -ContentType "application/json" -Body $loginBody
+
 $body = @{ prompt = "测试企业 AI 异步任务" } | ConvertTo-Json
-$task = Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/tasks -ContentType "application/json" -Body $body
+$task = Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/tasks `
+  -WebSession $session -ContentType "application/json" -Body $body
 $task
 Start-Sleep -Seconds 3
-Invoke-RestMethod "http://192.168.86.133/api/tasks/$($task.id)"
+Invoke-RestMethod "http://192.168.86.133/api/tasks/$($task.id)" -WebSession $session
 ```
 
 浏览器打开 `http://192.168.86.133/`，提交任务并观察 `queued → processing → completed`。
@@ -280,6 +308,13 @@ bash /tmp/bootstrap-deploy.sh agent/initial-project
 
 它会克隆代码、验证外部配置、启动基础设施、初始化存储、执行迁移、构建应用、分阶段启动并验收。目标目录非空时脚本会停止，避免覆盖已有代码。
 
+首次脚本完成后仍需交互式创建首个管理员：
+
+```bash
+cd /opt/enterprise-ai-platform
+bash ./deploy/scripts/create-admin.sh
+```
+
 ## 6. 后续更新脚本
 
 全部在 Linux 虚拟机执行：
@@ -299,6 +334,7 @@ cd /opt/enterprise-ai-platform
 | Nginx | `bash ./deploy/scripts/update-nginx.sh` |
 | 多个指定服务 | `bash ./deploy/scripts/update-services.sh nest-service worker` |
 | 全部应用 | `bash ./deploy/scripts/update-all.sh` |
+| 创建首个管理员 | `bash ./deploy/scripts/create-admin.sh` |
 
 脚本会先检查 Git 工作区，再执行 `fetch` 和 `pull --ff-only`。存在本地改动时会停止，不会覆盖。NestJS 或 Worker 更新前会执行数据库迁移；基础设施配置发生变化时应执行全量更新并人工核对数据兼容性。
 

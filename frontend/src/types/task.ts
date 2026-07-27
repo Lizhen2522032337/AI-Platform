@@ -13,6 +13,7 @@ export interface AiTask {
   errorMessage: string | null
   objectKey: string | null
   vectorId: string | null
+  createdById: number | null
   createdAt: string
   updatedAt: string
 }

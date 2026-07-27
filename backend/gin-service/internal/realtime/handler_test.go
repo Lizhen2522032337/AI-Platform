@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"gin-service/internal/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,7 +25,18 @@ func (f *fakeStore) Get(context.Context, string) (string, error) {
 func testRouter(store Store) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewHandler(store).RegisterRoutes(router)
+	NewHandler(store).RegisterRoutes(router, func(c *gin.Context) {
+		auth.SetPrincipal(c, auth.Principal{
+			UserID:       1,
+			Role:         "admin",
+			TokenVersion: 1,
+			ExpiresAt:    time.Now().Add(time.Hour),
+			Permissions: map[string]struct{}{
+				"tasks:read:any": {},
+			},
+		})
+		c.Next()
+	})
 	return router
 }
 

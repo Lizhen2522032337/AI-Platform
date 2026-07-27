@@ -34,6 +34,7 @@ main() {
     compose up -d nginx
     wait_for_healthy nginx
     "${SCRIPT_DIR}/verify.sh"
+    warn '若尚未创建管理员，请执行：bash ./deploy/scripts/create-admin.sh'
     log "首次完整部署完成，当前提交：$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 }
 
