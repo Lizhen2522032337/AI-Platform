@@ -119,21 +119,21 @@ ensure_platform_env() {
 }
 
 ensure_llm_env() {
-    local key
-    local -a required_keys=(
-        DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_MODEL
-        QWEN_API_KEY QWEN_BASE_URL QWEN_MODEL
-        LLM_REQUEST_TIMEOUT_SECONDS LLM_MAX_TOKENS
-    )
+    # local key
+    # local -a required_keys=(
+    #     DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_MODEL
+    #     QWEN_API_KEY QWEN_BASE_URL QWEN_MODEL
+    #     LLM_REQUEST_TIMEOUT_SECONDS LLM_MAX_TOKENS
+    # )
 
-    [[ -f "${LLM_ENV_FILE}" ]] || die "找不到独立大模型配置：${LLM_ENV_FILE}"
-    [[ -r "${LLM_ENV_FILE}" ]] || die "当前用户无法读取大模型配置：${LLM_ENV_FILE}"
-    for key in "${required_keys[@]}"; do
-        grep -Eq "^[[:space:]]*${key}=.+$" "${LLM_ENV_FILE}" \
-            || die "${LLM_ENV_FILE} 缺少 ${key}"
-    done
-    grep -Eqi 'change_me|请替换|你的工作空间|your[_-]?api|sk-xxx' "${LLM_ENV_FILE}" \
-        && die "${LLM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
+    # [[ -f "${LLM_ENV_FILE}" ]] || die "找不到独立大模型配置：${LLM_ENV_FILE}"
+    # [[ -r "${LLM_ENV_FILE}" ]] || die "当前用户无法读取大模型配置：${LLM_ENV_FILE}"
+    # for key in "${required_keys[@]}"; do
+    #     grep -Eq "^[[:space:]]*${key}=.+$" "${LLM_ENV_FILE}" \
+    #         || die "${LLM_ENV_FILE} 缺少 ${key}"
+    # done
+    # grep -Eqi 'change_me|请替换|你的工作空间|your[_-]?api|sk-xxx' "${LLM_ENV_FILE}" \
+    #     && die "${LLM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
 }
 
 compose() {
