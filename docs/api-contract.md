@@ -51,9 +51,12 @@
 
 ```json
 {
-  "prompt": "总结设备巡检记录并提取风险点"
+  "prompt": "总结设备巡检记录并提取风险点",
+  "modelProvider": "deepseek"
 }
 ```
+
+`modelProvider` 只能是 `deepseek` 或 `qwen`。客户端不能提交 API Key、接口地址或任意模型名；这些值由 FastAPI 的仓库外配置映射。
 
 任务响应：
 
@@ -62,6 +65,9 @@
   "id": 12,
   "prompt": "总结设备巡检记录并提取风险点",
   "status": "queued",
+  "modelProvider": "deepseek",
+  "modelName": null,
+  "answer": null,
   "result": null,
   "errorMessage": null,
   "objectKey": null,
@@ -88,7 +94,7 @@ SSE 事件名为 `task`，数据示例：
 
 ```text
 event: task
-data: {"id":12,"status":"processing"}
+data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"deepseek-v4-flash","partialText":"正在生成的回答"}
 ```
 
 ## 2. Docker 内部接口
@@ -98,29 +104,29 @@ data: {"id":12,"status":"processing"}
 | 方法 | 内部路径 | 说明 |
 | --- | --- | --- |
 | GET | `http://fastapi-service:8000/health` | 检查 Qdrant 和 MinIO |
-| POST | `http://fastapi-service:8000/process` | 执行 AI 处理 |
+| POST | `http://fastapi-service:8000/process` | 调用选定大模型并返回 NDJSON 增量流 |
 
 请求：
 
 ```json
 {
   "taskId": 12,
-  "prompt": "总结设备巡检记录"
+  "prompt": "总结设备巡检记录",
+  "modelProvider": "deepseek"
 }
 ```
 
-响应：
+响应媒体类型为 `application/x-ndjson`，每行一个事件：
 
-```json
-{
-  "taskId": 12,
-  "text": "AI 服务已处理：总结设备巡检记录",
-  "vectorId": "12",
-  "objectKey": "tasks/12/result.json"
-}
+```text
+{"type":"start","provider":"deepseek","model":"deepseek-v4-flash"}
+{"type":"delta","text":"第一段"}
+{"type":"delta","text":"第二段"}
+{"type":"usage","usage":{"prompt_tokens":20,"completion_tokens":50,"total_tokens":70}}
+{"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-当前实现使用 SHA-256 生成固定 8 维演示向量，用于验证完整链路；接入真实 Embedding 或大模型时，只替换 FastAPI 的处理实现，不改变 NestJS、RabbitMQ、Worker 和前端契约。
+FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 写入 Redis，Gin 再向浏览器推送。完整回答会写入 MinIO，任务的 `answer`、模型信息和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 
 ### 2.2 RabbitMQ 消息
 
@@ -131,6 +137,7 @@ data: {"id":12,"status":"processing"}
   "id": 12,
   "ownerId": 1,
   "prompt": "总结设备巡检记录",
+  "modelProvider": "deepseek",
   "createdAt": "2026-07-26T12:00:00.000Z"
 }
 ```

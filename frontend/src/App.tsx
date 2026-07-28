@@ -4,7 +4,7 @@ import { tasksApi } from './api/tasks'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { LoginScreen } from './components/LoginScreen'
 import type { AuthUser } from './types/auth'
-import type { AiTask, TaskEvent, TaskStatus } from './types/task'
+import type { AiTask, ModelProvider, TaskEvent, TaskStatus } from './types/task'
 import './App.css'
 
 const statusText: Record<TaskStatus, string> = {
@@ -18,6 +18,7 @@ function App() {
   const [sessionLoading, setSessionLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
   const [prompt, setPrompt] = useState('')
+  const [modelProvider, setModelProvider] = useState<ModelProvider>('deepseek')
   const [tasks, setTasks] = useState<AiTask[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -43,7 +44,13 @@ function App() {
   const loadTasks = useCallback(async () => {
     if (!user) return
     try {
-      setTasks(await tasksApi.list())
+      const freshTasks = await tasksApi.list()
+      setTasks((current) =>
+        freshTasks.map((task) => ({
+          ...task,
+          partialText: current.find((item) => item.id === task.id)?.partialText,
+        })),
+      )
       setError('')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '任务加载失败')
@@ -62,39 +69,48 @@ function App() {
     }
   }, [loadTasks, user])
 
-  const activeTask = useMemo(
-    () => tasks.find((task) => task.status === 'queued' || task.status === 'processing'),
+  const activeTaskIds = useMemo(
+    () => tasks
+      .filter((task) => task.status === 'queued' || task.status === 'processing')
+      .map((task) => task.id)
+      .join(','),
     [tasks],
   )
 
   // Gin 验证 HttpOnly Cookie 后提供 SSE；连接异常时仍有定时刷新兜底。
   useEffect(() => {
-    if (!user || !activeTask) return
-    const source = new EventSource(tasksApi.eventsUrl(activeTask.id), {
-      withCredentials: true,
+    if (!user || !activeTaskIds) return
+    const sources = activeTaskIds.split(',').map((taskId) => {
+      const source = new EventSource(tasksApi.eventsUrl(Number(taskId)), {
+        withCredentials: true,
+      })
+      source.addEventListener('task', (event) => {
+        const update = JSON.parse((event as MessageEvent<string>).data) as TaskEvent
+        setTasks((current) =>
+          current.map((task) =>
+            task.id === update.id
+              ? {
+                  ...task,
+                  status: update.status,
+                  modelName: update.modelName ?? task.modelName,
+                  partialText: update.partialText ?? task.partialText,
+                  result: update.result ?? task.result,
+                  answer: update.result?.text ?? task.answer,
+                  errorMessage: update.errorMessage ?? task.errorMessage,
+                }
+              : task,
+          ),
+        )
+        if (update.status === 'completed' || update.status === 'failed') {
+          source.close()
+          void loadTasks()
+        }
+      })
+      source.onerror = () => source.close()
+      return source
     })
-    source.addEventListener('task', (event) => {
-      const update = JSON.parse((event as MessageEvent<string>).data) as TaskEvent
-      setTasks((current) =>
-        current.map((task) =>
-          task.id === update.id
-            ? {
-                ...task,
-                status: update.status,
-                result: update.result ?? task.result,
-                errorMessage: update.errorMessage ?? task.errorMessage,
-              }
-            : task,
-        ),
-      )
-      if (update.status === 'completed' || update.status === 'failed') {
-        source.close()
-        void loadTasks()
-      }
-    })
-    source.onerror = () => source.close()
-    return () => source.close()
-  }, [activeTask, loadTasks, user])
+    return () => sources.forEach((source) => source.close())
+  }, [activeTaskIds, loadTasks, user])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -106,7 +122,7 @@ function App() {
     setSubmitting(true)
     setError('')
     try {
-      const task = await tasksApi.create(cleanPrompt)
+      const task = await tasksApi.create(cleanPrompt, modelProvider)
       setTasks((current) => [task, ...current])
       setPrompt('')
     } catch (requestError) {
@@ -159,7 +175,7 @@ function App() {
       </header>
 
       <section className="architecture panel" aria-label="系统处理链路">
-        {['React', 'Nginx', 'NestJS 鉴权', 'RabbitMQ', 'Worker', 'FastAPI', 'Qdrant · MinIO'].map(
+        {['React', 'Nginx', 'NestJS 鉴权', 'RabbitMQ', 'Worker', 'FastAPI', 'DeepSeek · 千问', 'Qdrant · MinIO'].map(
           (name, index, all) => (
             <div className="flow-step" key={name}>
               <span>{name}</span>{index < all.length - 1 && <b>→</b>}
@@ -183,6 +199,15 @@ function App() {
                 rows={8}
                 value={prompt}
               />
+              <label htmlFor="model-provider">选择大模型</label>
+              <select
+                id="model-provider"
+                onChange={(event) => setModelProvider(event.target.value as ModelProvider)}
+                value={modelProvider}
+              >
+                <option value="deepseek">DeepSeek</option>
+                <option value="qwen">通义千问</option>
+              </select>
               <button className="button primary" disabled={submitting} type="submit">
                 {submitting ? '正在提交…' : '提交到 RabbitMQ'}
               </button>
@@ -205,10 +230,21 @@ function App() {
                 <article className="task-card" key={task.id}>
                   <div className="task-card-head">
                     <strong>#{task.id}{user.role === 'admin' && task.createdById ? ` · 用户 ${task.createdById}` : ''}</strong>
-                    <span className={`task-status ${task.status}`}>{statusText[task.status]}</span>
+                    <div className="task-badges">
+                      <span className="model-badge">
+                        {task.modelProvider === 'qwen' ? '通义千问' : 'DeepSeek'}
+                        {task.modelName ? ` · ${task.modelName}` : ''}
+                      </span>
+                      <span className={`task-status ${task.status}`}>{statusText[task.status]}</span>
+                    </div>
                   </div>
                   <p>{task.prompt}</p>
-                  {task.result?.text && <div className="result-box">{task.result.text}</div>}
+                  {(task.partialText || task.answer || task.result?.text) && (
+                    <div className={`result-box ${task.status === 'processing' ? 'streaming' : ''}`}>
+                      {task.partialText || task.answer || task.result?.text}
+                      {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
+                    </div>
+                  )}
                   {task.errorMessage && <div className="inline-error">{task.errorMessage}</div>}
                   <small>{new Date(task.updatedAt).toLocaleString('zh-CN')}</small>
                 </article>

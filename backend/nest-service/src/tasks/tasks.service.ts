@@ -51,6 +51,9 @@ export class TasksService {
         errorMessage: null,
         objectKey: null,
         vectorId: null,
+        modelProvider: payload.modelProvider,
+        modelName: null,
+        answer: null,
         createdById: user.id,
       }),
     );
@@ -60,11 +63,13 @@ export class TasksService {
         id: Number(task.id),
         ownerId: user.id,
         status: task.status,
+        modelProvider: task.modelProvider,
       });
       await this.rabbitService.publishTask({
         id: Number(task.id),
         ownerId: user.id,
         prompt: task.prompt,
+        modelProvider: task.modelProvider,
         createdAt: task.createdAt.toISOString(),
       });
     } catch (error) {
@@ -76,6 +81,7 @@ export class TasksService {
           id: Number(task.id),
           ownerId: user.id,
           status: task.status,
+          modelProvider: task.modelProvider,
           errorMessage: task.errorMessage,
         });
       } catch {

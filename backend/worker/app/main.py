@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import urllib.request
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -69,6 +70,8 @@ def update_task(
     *,
     result: dict[str, Any] | None = None,
     error_message: str | None = None,
+    answer: str | None = None,
+    model_name: str | None = None,
 ) -> None:
     """更新任务持久化状态。"""
 
@@ -81,6 +84,8 @@ def update_task(
                 error_message = %s,
                 object_key = %s,
                 vector_id = %s,
+                answer = COALESCE(%s, answer),
+                model_name = COALESCE(%s, model_name),
                 updated_at = NOW()
             WHERE id = %s
             """,
@@ -90,24 +95,43 @@ def update_task(
                 error_message,
                 result.get("objectKey") if result else None,
                 result.get("vectorId") if result else None,
+                answer,
+                model_name,
                 task_id,
             ),
         )
 
 
-def call_ai_service(task_id: int, prompt: str) -> dict[str, Any]:
-    """调用内部 FastAPI AI 服务。"""
+def stream_ai_service(
+    task_id: int,
+    prompt: str,
+    model_provider: str,
+) -> Iterator[dict[str, Any]]:
+    """逐行读取内部 FastAPI 返回的 NDJSON 大模型事件流。"""
 
     base_url = os.getenv("AI_SERVICE_URL", "http://fastapi-service:8000")
-    body = json.dumps({"taskId": task_id, "prompt": prompt}).encode("utf-8")
+    body = json.dumps(
+        {
+            "taskId": task_id,
+            "prompt": prompt,
+            "modelProvider": model_provider,
+        }
+    ).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/process",
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return json.loads(response.read().decode("utf-8"))
+    with urllib.request.urlopen(request, timeout=360) as response:
+        for raw_line in response:
+            line = raw_line.decode("utf-8").strip()
+            if not line:
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict) or "type" not in event:
+                raise RuntimeError("AI 服务返回了无效事件")
+            yield event
 
 
 def process_message(body: bytes) -> None:
@@ -118,22 +142,73 @@ def process_message(body: bytes) -> None:
     # 兼容认证功能上线前已经进入队列的旧消息；0 表示无归属，仅管理员可查看。
     owner_id = int(message.get("ownerId") or 0)
     prompt = str(message["prompt"])
+    model_provider = str(message.get("modelProvider") or "deepseek")
+    if model_provider not in {"deepseek", "qwen"}:
+        raise RuntimeError("不支持的模型供应商")
     processing_state = {
         "id": task_id,
         "ownerId": owner_id,
         "status": "processing",
+        "modelProvider": model_provider,
+        "partialText": "",
     }
     update_task(task_id, "processing")
     save_state(task_id, processing_state)
 
-    result = call_ai_service(task_id, prompt)
-    update_task(task_id, "completed", result=result)
+    answer_parts: list[str] = []
+    model_name: str | None = None
+    result: dict[str, Any] | None = None
+    last_publish = 0.0
+    for event in stream_ai_service(task_id, prompt, model_provider):
+        event_type = event.get("type")
+        if event_type == "start":
+            model_name = str(event.get("model") or "") or None
+        elif event_type == "delta":
+            text = str(event.get("text") or "")
+            if not text:
+                continue
+            answer_parts.append(text)
+            now = time.monotonic()
+            # 合并高频 token，最多每 100ms 写一次 Redis，兼顾流畅度和中间件压力。
+            if now - last_publish >= 0.1:
+                save_state(
+                    task_id,
+                    {
+                        **processing_state,
+                        "modelName": model_name,
+                        "partialText": "".join(answer_parts),
+                    },
+                )
+                last_publish = now
+        elif event_type == "complete":
+            candidate = event.get("result")
+            if not isinstance(candidate, dict):
+                raise RuntimeError("AI 服务没有返回有效结果")
+            result = candidate
+            model_name = str(result.get("model") or model_name or "") or None
+        elif event_type == "error":
+            raise RuntimeError(str(event.get("message") or "AI 服务处理失败"))
+
+    if result is None:
+        raise RuntimeError("AI 服务流意外结束")
+    answer = str(result.get("text") or "".join(answer_parts)).strip()
+    if not answer:
+        raise RuntimeError("AI 服务没有返回回答")
+    update_task(
+        task_id,
+        "completed",
+        result=result,
+        answer=answer,
+        model_name=model_name,
+    )
     save_state(
         task_id,
         {
             "id": task_id,
             "ownerId": owner_id,
             "status": "completed",
+            "modelProvider": model_provider,
+            "modelName": model_name,
             "result": result,
         },
     )

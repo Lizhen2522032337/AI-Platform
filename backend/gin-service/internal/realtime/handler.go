@@ -124,7 +124,8 @@ func (h *Handler) events(c *gin.Context) {
 		return
 	}
 	lastValue := ""
-	ticker := time.NewTicker(time.Second)
+	// 200ms 轮询让大模型增量回答接近实时展示，同时限制单连接 Redis 压力。
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {

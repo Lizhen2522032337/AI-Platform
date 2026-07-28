@@ -24,6 +24,9 @@ function sampleTask(): AiTask {
     errorMessage: null,
     objectKey: null,
     vectorId: null,
+    modelProvider: 'deepseek',
+    modelName: null,
+    answer: null,
     createdById: 7,
     createdAt: new Date('2026-07-26T00:00:00.000Z'),
     updatedAt: new Date('2026-07-26T00:00:00.000Z'),
@@ -56,17 +59,21 @@ describe('TasksService', () => {
     repository.create.mockReturnValue(task);
     repository.save.mockResolvedValue(task);
 
-    await expect(service.create({ prompt: task.prompt }, user)).resolves.toEqual(task);
+    await expect(
+      service.create({ prompt: task.prompt, modelProvider: 'deepseek' }, user),
+    ).resolves.toEqual(task);
     expect(rabbitService.publishTask).toHaveBeenCalledWith({
       id: 1,
       ownerId: 7,
       prompt: task.prompt,
+      modelProvider: 'deepseek',
       createdAt: '2026-07-26T00:00:00.000Z',
     });
     expect(redisService.setTaskState).toHaveBeenCalledWith(1, {
       id: 1,
       ownerId: 7,
       status: 'queued',
+      modelProvider: 'deepseek',
     });
   });
 

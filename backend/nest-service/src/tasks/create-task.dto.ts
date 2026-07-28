@@ -1,5 +1,8 @@
 import { Transform, type TransformFnParams } from 'class-transformer';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+
+export const MODEL_PROVIDERS = ['deepseek', 'qwen'] as const;
+export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export class CreateTaskDto {
   @Transform(({ value }: TransformFnParams): unknown =>
@@ -9,4 +12,7 @@ export class CreateTaskDto {
   @MinLength(1)
   @MaxLength(4000)
   prompt: string;
+
+  @IsIn(MODEL_PROVIDERS)
+  modelProvider: ModelProvider;
 }

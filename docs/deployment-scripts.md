@@ -11,6 +11,7 @@
 | Git 仓库 | `/opt/enterprise-ai-platform` |
 | PostgreSQL 配置 | `/etc/enterprise-ai-platform/database.env` |
 | Redis/RabbitMQ/MinIO 等配置 | `/etc/enterprise-ai-platform/platform.env` |
+| DeepSeek/千问 API 配置 | `/etc/enterprise-ai-platform/llm.env` |
 | 部署分支和数据库模式 | `/etc/enterprise-ai-platform/deploy.env` |
 
 启动顺序：
@@ -57,6 +58,7 @@ exit
 sudo install -d -m 700 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
 install -m 600 /dev/null /etc/enterprise-ai-platform/database.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/platform.env
+install -m 600 /dev/null /etc/enterprise-ai-platform/llm.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/deploy.env
 ```
 
@@ -120,7 +122,30 @@ LOG_LEVEL=INFO
 
 可用 `openssl rand -hex 48` 生成 JWT 随机密钥。当前通过 HTTP 访问所以 `COOKIE_SECURE=false`；配置 HTTPS 后必须改为 `true`。
 
-### 3.4 部署行为配置
+### 3.4 大模型配置
+
+```bash
+vi /etc/enterprise-ai-platform/llm.env
+```
+
+填入真实 Key。此文件不在 Git 仓库内，而且只注入 FastAPI 容器：
+
+```dotenv
+DEEPSEEK_API_KEY=替换为真实DeepSeek_API_Key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+
+QWEN_API_KEY=替换为真实百炼_API_Key
+QWEN_BASE_URL=https://替换为WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+QWEN_MODEL=qwen-plus
+
+LLM_REQUEST_TIMEOUT_SECONDS=300
+LLM_MAX_TOKENS=2048
+```
+
+百炼 API Key 与 `QWEN_BASE_URL` 具有地域和业务空间对应关系，请直接使用百炼控制台为该 Key 显示的 OpenAI 兼容地址。不要在聊天、Git、截图或 shell 命令中直接打印 Key。
+
+### 3.5 部署行为配置
 
 ```bash
 vi /etc/enterprise-ai-platform/deploy.env
@@ -133,6 +158,7 @@ DEPLOY_BRANCH=agent/initial-project
 DATABASE_MODE=managed
 DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
 PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
+LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
 ```
 
 `managed` 表示 Compose 负责运行 PostgreSQL。以后使用外部数据库时改为 `external`。
@@ -143,6 +169,7 @@ PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
 ls -l /etc/enterprise-ai-platform
 grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
 grep -v 'PASSWORD\|PASS=\|SECRET=' /etc/enterprise-ai-platform/platform.env
+grep -E '^(DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|QWEN_BASE_URL|QWEN_MODEL|LLM_)' /etc/enterprise-ai-platform/llm.env
 cat /etc/enterprise-ai-platform/deploy.env
 ```
 
@@ -168,6 +195,7 @@ git log -1 --oneline
 cd /opt/enterprise-ai-platform
 export DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
 export PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
+export LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
 docker compose -f deploy/docker-compose.yml --profile managed-db config --quiet
 ```
 
@@ -281,7 +309,10 @@ $loginBody = @{
 Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/auth/login `
   -WebSession $session -ContentType "application/json" -Body $loginBody
 
-$body = @{ prompt = "测试企业 AI 异步任务" } | ConvertTo-Json
+$body = @{
+  prompt = "测试企业 AI 异步任务"
+  modelProvider = "deepseek"
+} | ConvertTo-Json
 $task = Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/tasks `
   -WebSession $session -ContentType "application/json" -Body $body
 $task
@@ -289,11 +320,11 @@ Start-Sleep -Seconds 3
 Invoke-RestMethod "http://192.168.86.133/api/tasks/$($task.id)" -WebSession $session
 ```
 
-浏览器打开 `http://192.168.86.133/`，提交任务并观察 `queued → processing → completed`。
+浏览器打开 `http://192.168.86.133/`，选择 DeepSeek 或通义千问，提交任务并观察 `queued → processing（回答持续出现）→ completed`。
 
 ## 5. 以后首次部署：一键脚本
 
-先完成第 3 节的三个配置文件。然后在 Windows PowerShell 复制脚本：
+先完成第 3 节的四个配置文件。然后在 Windows PowerShell 复制脚本：
 
 ```powershell
 scp "D:\LiZhen\StudyMaterials\AI-Platform\enterprise-ai-platform\deploy\scripts\bootstrap-deploy.sh" <虚拟机用户名>@192.168.86.133:/tmp/bootstrap-deploy.sh

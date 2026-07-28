@@ -19,7 +19,7 @@ React -> Nginx -> Gin realtime -> Redis
 | Nginx | 唯一入口与反向代理 | `:80` |
 | NestJS | 登录、RBAC、用户管理、任务创建和查询 | `/api/` |
 | Gin | JWT 与任务归属校验、SSE 实时状态 | `/realtime/` |
-| FastAPI | AI 处理、向量与结果文件 | 仅 Docker 内网 |
+| FastAPI | 调用 DeepSeek/千问、统一流式输出、向量与结果文件 | 仅 Docker 内网 |
 | Worker | 消费 RabbitMQ 并协调 AI 处理 | 仅 Docker 内网 |
 | PostgreSQL | 持久化任务 | 仅 Docker 内网 |
 | Redis | 实时状态缓存 | 仅 Docker 内网 |
@@ -34,4 +34,4 @@ React -> Nginx -> Gin realtime -> Redis
 - [登录认证与角色权限](docs/authentication-rbac.md)
 - [首次手动部署与更新脚本](docs/deployment-scripts.md)
 
-部署约束：Windows 家庭版不运行 Docker；所有镜像构建和容器运行均位于 Linux 虚拟机 `192.168.86.133`。真实配置固定保存在仓库外的 `/etc/enterprise-ai-platform`。
+部署约束：Windows 家庭版不运行 Docker；所有镜像构建和容器运行均位于 Linux 虚拟机 `192.168.86.133`。真实配置固定保存在仓库外的 `/etc/enterprise-ai-platform`，大模型 Key 单独保存在 `llm.env` 且只注入 FastAPI。

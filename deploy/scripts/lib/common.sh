@@ -89,7 +89,7 @@ ensure_database_env() {
     esac
 
     if [[ "${DATABASE_MODE}" == 'managed' ]]; then
-        configured_host="$(awk -F= '/^[[:space:]]*POSTGRES_HOST=/{sub(/^[^=]*=/, ""); gsub(/^[[:space:"]+|[[:space:"]+$/, ""); print; exit}' "${DATABASE_ENV_FILE}")"
+        configured_host="$(awk -F= '/^[[:space:]]*POSTGRES_HOST=/{sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); gsub(/^"|"$/, ""); print; exit}' "${DATABASE_ENV_FILE}")"
         [[ "${configured_host}" == 'postgres' ]] \
             || die 'managed 模式要求 database.env 中 POSTGRES_HOST=postgres'
     fi

@@ -9,6 +9,7 @@ readonly CONFIG_DIR="${CONFIG_DIR:-/etc/enterprise-ai-platform}"
 readonly BRANCH="${1:-${DEPLOY_BRANCH:-agent/initial-project}}"
 readonly DATABASE_CONFIG="${DATABASE_ENV_FILE:-${CONFIG_DIR}/database.env}"
 readonly PLATFORM_CONFIG="${PLATFORM_ENV_FILE:-${CONFIG_DIR}/platform.env}"
+readonly LLM_CONFIG="${LLM_ENV_FILE:-${CONFIG_DIR}/llm.env}"
 readonly DATABASE_MODE_VALUE="${DATABASE_MODE:-managed}"
 
 log() {
@@ -40,7 +41,7 @@ else
     sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "${CONFIG_DIR}"
 fi
 
-# 数据库和平台连接文件必须由用户预先准备；脚本不会生成或输出真实密码。
+# 数据库、平台和大模型配置必须由用户预先准备；脚本不会生成或输出真实密码或 API Key。
 [[ -f "${DATABASE_CONFIG}" ]] \
     || die "找不到 ${DATABASE_CONFIG}；请先按部署手册准备数据库连接文件"
 [[ -r "${DATABASE_CONFIG}" ]] \
@@ -49,12 +50,17 @@ fi
     || die "找不到 ${PLATFORM_CONFIG}；请先按部署手册准备平台连接配置"
 [[ -r "${PLATFORM_CONFIG}" ]] \
     || die "当前用户无法读取 ${PLATFORM_CONFIG}"
+[[ -f "${LLM_CONFIG}" ]] \
+    || die "找不到 ${LLM_CONFIG}；请先按部署手册准备 DeepSeek/千问配置"
+[[ -r "${LLM_CONFIG}" ]] \
+    || die "当前用户无法读取 ${LLM_CONFIG}"
 
 umask 077
 {
     printf 'DEPLOY_BRANCH=%q\n' "${BRANCH}"
     printf 'DATABASE_ENV_FILE=%q\n' "${DATABASE_CONFIG}"
     printf 'PLATFORM_ENV_FILE=%q\n' "${PLATFORM_CONFIG}"
+    printf 'LLM_ENV_FILE=%q\n' "${LLM_CONFIG}"
     printf 'DATABASE_MODE=%q\n' "${DATABASE_MODE_VALUE}"
 } >"${CONFIG_DIR}/deploy.env"
 

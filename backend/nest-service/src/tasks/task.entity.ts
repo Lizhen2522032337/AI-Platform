@@ -5,6 +5,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { ModelProvider } from './create-task.dto';
 
 export type TaskStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
@@ -30,6 +31,15 @@ export class AiTask {
 
   @Column({ name: 'vector_id', type: 'text', nullable: true })
   vectorId: string | null;
+
+  @Column({ name: 'model_provider', type: 'varchar', length: 20, default: 'deepseek' })
+  modelProvider: ModelProvider;
+
+  @Column({ name: 'model_name', type: 'text', nullable: true })
+  modelName: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  answer: string | null;
 
   @Column({ name: 'created_by', type: 'integer', nullable: true })
   createdById: number | null;

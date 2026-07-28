@@ -16,7 +16,7 @@ NestJS Auth + Backend          Gin Auth + Realtime
   |
   +--> PostgreSQL
   +--> Redis
-  +--> RabbitMQ --> Worker --> FastAPI
+  +--> RabbitMQ --> Worker --> FastAPI --> DeepSeek / 通义千问
                            |       |
                            |       +--> Qdrant
                            |       +--> MinIO
@@ -67,19 +67,20 @@ enterprise-ai-platform/
 3. NestJS 验证 JWT 和 `tasks:create` 权限，在 PostgreSQL 创建带 `created_by` 的 `queued` 任务。
 4. NestJS 把持久化消息写入 RabbitMQ quorum queue。
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
-6. Worker 调用 FastAPI `/process`。
-7. FastAPI 写入 Qdrant 向量和 MinIO JSON 结果。
-8. Worker 把结果写回 PostgreSQL，并把 `completed` 状态写入 Redis。
-9. Gin 验证 JWT、token 版本和 Redis 中的 `ownerId`，再通过 SSE 推送给 React。
+6. Worker 调用 FastAPI `/process`；FastAPI 根据 `modelProvider` 使用服务器配置调用 DeepSeek 或通义千问。
+7. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
+8. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
+9. 大模型完成后，FastAPI 把完整结果写入 Qdrant 和 MinIO，再发送 `complete` 事件。
+10. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态。
 
 ## 4. 数据和端口边界
 
 - Nginx 向局域网发布 TCP 80；PostgreSQL 可选仅绑定宿主机 `127.0.0.1:5432` 供 SSH 隧道使用。
 - Redis、RabbitMQ、Qdrant、MinIO、NestJS、FastAPI、Gin、Worker 均只在 Compose 网络通信。
 - PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 使用独立 Docker 具名卷。
-- 真实配置全部位于 `/etc/enterprise-ai-platform`，不写入 Git。
+- 真实配置全部位于 `/etc/enterprise-ai-platform`，不写入 Git；API Key 位于独立 `llm.env`，仅注入 FastAPI。
 - Docker Compose 更新应用时不得使用 `down -v`，避免删除数据卷。
 
 ## 5. 当前 AI 实现边界
 
-本版本实现的是可运行的架构基线，不包含真实 LLM 密钥和厂商绑定。FastAPI 当前生成演示向量及结果文件，后续可以在不改变外部接口的情况下接入 DeepSeek、OpenAI、私有模型或本地 Embedding 服务。
+本版本通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问，支持流式回答。供应商与实际模型由服务端白名单和 `llm.env` 控制，前端只能选择供应商。Qdrant 当前仍使用演示向量；它不影响大模型回答、流式展示、PostgreSQL 答案持久化和 MinIO 结果归档。

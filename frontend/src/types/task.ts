@@ -1,9 +1,14 @@
 export type TaskStatus = 'queued' | 'processing' | 'completed' | 'failed'
+export type ModelProvider = 'deepseek' | 'qwen'
 
 export interface AiTask {
   id: number
   prompt: string
   status: TaskStatus
+  modelProvider: ModelProvider
+  modelName: string | null
+  answer: string | null
+  partialText?: string
   result: {
     taskId?: number
     text?: string
@@ -21,6 +26,9 @@ export interface AiTask {
 export interface TaskEvent {
   id: number
   status: TaskStatus
+  modelProvider?: ModelProvider
+  modelName?: string
+  partialText?: string
   result?: AiTask['result']
   errorMessage?: string
 }

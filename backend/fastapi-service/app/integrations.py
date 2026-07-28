@@ -45,12 +45,18 @@ def _vector_for(text: str) -> list[float]:
     return [round(value / 255, 6) for value in digest[:8]]
 
 
-def process_prompt(task_id: int, prompt: str) -> dict[str, object]:
-    """处理任务，将向量写入 Qdrant、结果文件写入 MinIO。"""
+def save_result(
+    task_id: int,
+    prompt: str,
+    answer: str,
+    provider: str,
+    model: str,
+    usage: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """保存完整回答，将检索向量写入 Qdrant、结果 JSON 写入 MinIO。"""
 
     settings = get_settings()
-    vector = _vector_for(prompt)
-    result_text = f"AI 服务已处理：{prompt}"
+    vector = _vector_for(f"{prompt}\n{answer}")
     vector_id = str(task_id)
     object_key = f"tasks/{task_id}/result.json"
 
@@ -68,7 +74,13 @@ def process_prompt(task_id: int, prompt: str) -> dict[str, object]:
             models.PointStruct(
                 id=task_id,
                 vector=vector,
-                payload={"taskId": task_id, "prompt": prompt},
+                payload={
+                    "taskId": task_id,
+                    "prompt": prompt,
+                    "answer": answer,
+                    "provider": provider,
+                    "model": model,
+                },
             )
         ],
         wait=True,
@@ -76,7 +88,10 @@ def process_prompt(task_id: int, prompt: str) -> dict[str, object]:
 
     result = {
         "taskId": task_id,
-        "text": result_text,
+        "text": answer,
+        "provider": provider,
+        "model": model,
+        "usage": usage or {},
         "vectorId": vector_id,
         "objectKey": object_key,
     }
