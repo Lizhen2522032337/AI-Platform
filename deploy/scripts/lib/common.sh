@@ -138,11 +138,10 @@ ensure_llm_env() {
 
 compose() {
     if [[ "${DATABASE_MODE}" == 'managed' ]]; then
-        DATABASE_ENV_FILE="${DATABASE_ENV_FILE}" PLATFORM_ENV_FILE="${PLATFORM_ENV_FILE}" \
-            docker compose -f "${COMPOSE_FILE}" --profile managed-db "$@"
+        # 三个配置路径已在文件开头 export；不要在命令前重复赋值只读变量。
+        docker compose -f "${COMPOSE_FILE}" --profile managed-db "$@"
     else
-        DATABASE_ENV_FILE="${DATABASE_ENV_FILE}" PLATFORM_ENV_FILE="${PLATFORM_ENV_FILE}" \
-            docker compose -f "${COMPOSE_FILE}" "$@"
+        docker compose -f "${COMPOSE_FILE}" "$@"
     fi
 }
 
