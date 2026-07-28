@@ -19,6 +19,7 @@ export interface AiTask {
   objectKey: string | null
   vectorId: string | null
   createdById: number | null
+  conversationId: number | null
   createdAt: string
   updatedAt: string
 }

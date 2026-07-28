@@ -44,6 +44,9 @@ export class AiTask {
   @Column({ name: 'created_by', type: 'integer', nullable: true })
   createdById: number | null;
 
+  @Column({ name: 'conversation_id', type: 'integer', nullable: true })
+  conversationId: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

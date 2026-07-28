@@ -9,6 +9,7 @@ deploy/.state/
 !.env.example
 !.env.*.example
 *.pem
+*.npm-cache
 *.key
 *.p12
 *.pfx
@@ -16,6 +17,7 @@ secrets/
 
 # 常见本地依赖、缓存和构建产物。
 node_modules/
+.npm-cache/
 dist/
 build/
 coverage/
@@ -24,6 +26,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.go-cache/
 .venv/
 venv/
 
@@ -36,3 +39,7 @@ release-output/
 *.tar
 *.tar.gz
 *.sha256
+
+# 编辑器异常退出产生的交换文件不应阻塞虚拟机部署。
+*.swp
+*.swo

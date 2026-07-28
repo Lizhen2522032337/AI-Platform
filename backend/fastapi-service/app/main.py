@@ -3,16 +3,24 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from app.integrations import check_integrations, save_result
-from app.llm import LlmProviderError, ModelProvider, stream_chat
+from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
 
 
 logger = logging.getLogger(__name__)
+
+
+class ConversationMessage(BaseModel):
+    """Worker 从 PostgreSQL 组装的单条历史消息。"""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20000)
 
 
 class ProcessRequest(BaseModel):
@@ -21,6 +29,7 @@ class ProcessRequest(BaseModel):
     task_id: int = Field(alias="taskId", gt=0)
     prompt: str = Field(min_length=1, max_length=4000)
     model_provider: ModelProvider = Field(alias="modelProvider")
+    messages: list[ConversationMessage] = Field(min_length=1, max_length=41)
 
 
 app = FastAPI(title="Enterprise AI Service", version="1.0.0")
@@ -58,7 +67,11 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
     usage: dict[str, object] | None = None
     model = ""
     try:
-        async for event in stream_chat(payload.model_provider, payload.prompt):
+        history: list[ChatMessage] = [
+            {"role": message.role, "content": message.content}
+            for message in payload.messages
+        ]
+        async for event in stream_chat(payload.model_provider, history):
             if event["type"] == "start":
                 model = str(event["model"])
             elif event["type"] == "delta":

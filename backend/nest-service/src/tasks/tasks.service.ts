@@ -42,6 +42,7 @@ export class TasksService {
   async create(
     payload: CreateTaskDto,
     user: AuthenticatedUser,
+    conversationId: number | null = null,
   ): Promise<AiTask> {
     let task = await this.repository.save(
       this.repository.create({
@@ -55,6 +56,7 @@ export class TasksService {
         modelName: null,
         answer: null,
         createdById: user.id,
+        conversationId,
       }),
     );
 
@@ -64,12 +66,14 @@ export class TasksService {
         ownerId: user.id,
         status: task.status,
         modelProvider: task.modelProvider,
+        conversationId,
       });
       await this.rabbitService.publishTask({
         id: Number(task.id),
         ownerId: user.id,
         prompt: task.prompt,
         modelProvider: task.modelProvider,
+        conversationId,
         createdAt: task.createdAt.toISOString(),
       });
     } catch (error) {
@@ -82,6 +86,7 @@ export class TasksService {
           ownerId: user.id,
           status: task.status,
           modelProvider: task.modelProvider,
+          conversationId,
           errorMessage: task.errorMessage,
         });
       } catch {

@@ -24,9 +24,13 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
-    async def fake_stream(provider, prompt):
+    async def fake_stream(provider, messages):
         assert provider == "qwen"
-        assert prompt == "测试任务"
+        assert messages == [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": "你好，有什么可以帮你？"},
+            {"role": "user", "content": "测试任务"},
+        ]
         yield {"type": "start", "provider": provider, "model": "qwen-test"}
         yield {"type": "delta", "text": "处理"}
         yield {"type": "delta", "text": "完成"}
@@ -46,7 +50,16 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     )
     response = client.post(
         "/process",
-        json={"taskId": 7, "prompt": "测试任务", "modelProvider": "qwen"},
+        json={
+            "taskId": 7,
+            "prompt": "测试任务",
+            "modelProvider": "qwen",
+            "messages": [
+                {"role": "user", "content": "你好"},
+                {"role": "assistant", "content": "你好，有什么可以帮你？"},
+                {"role": "user", "content": "测试任务"},
+            ],
+        },
     )
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines()]
@@ -58,6 +71,11 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
 def test_process_rejects_blank_prompt() -> None:
     response = client.post(
         "/process",
-        json={"taskId": 1, "prompt": "", "modelProvider": "deepseek"},
+        json={
+            "taskId": 1,
+            "prompt": "",
+            "modelProvider": "deepseek",
+            "messages": [{"role": "user", "content": ""}],
+        },
     )
     assert response.status_code == 422

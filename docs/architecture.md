@@ -16,7 +16,8 @@ NestJS Auth + Backend          Gin Auth + Realtime
   |
   +--> PostgreSQL
   +--> Redis
-  +--> RabbitMQ --> Worker --> FastAPI --> DeepSeek / 通义千问
+  +--> PostgreSQL 会话历史
+  +--> RabbitMQ --> Worker --> 读取最近对话 --> FastAPI --> DeepSeek / 通义千问
                            |       |
                            |       +--> Qdrant
                            |       +--> MinIO
@@ -63,15 +64,16 @@ enterprise-ai-platform/
 ## 3. 一次任务的完整流程
 
 1. React 通过 NestJS 登录；浏览器得到一小时 HttpOnly JWT Cookie。
-2. React 向 `POST /api/tasks` 提交 prompt，Nginx 转给 NestJS。
-3. NestJS 验证 JWT 和 `tasks:create` 权限，在 PostgreSQL 创建带 `created_by` 的 `queued` 任务。
+2. React 创建或选择一个会话，向 `POST /api/conversations/:id/messages` 提交消息。
+3. NestJS 验证 JWT、会话归属和 `tasks:create` 权限，在 PostgreSQL 创建带 `created_by`、`conversation_id` 的 `queued` 任务。
 4. NestJS 把持久化消息写入 RabbitMQ quorum queue。
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
-6. Worker 调用 FastAPI `/process`；FastAPI 根据 `modelProvider` 使用服务器配置调用 DeepSeek 或通义千问。
-7. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
-8. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
-9. 大模型完成后，FastAPI 把完整结果写入 Qdrant 和 MinIO，再发送 `complete` 事件。
-10. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态。
+6. Worker 从 PostgreSQL 读取该会话最近若干轮已完成问答，组装 `user/assistant` 消息历史，再调用 FastAPI `/process`。
+7. FastAPI 根据 `modelProvider` 使用服务器配置调用 DeepSeek 或通义千问，并把完整历史随本轮问题一起发送。
+8. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
+9. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
+10. 大模型完成后，FastAPI 把完整结果写入 Qdrant 和 MinIO，再发送 `complete` 事件。
+11. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态；下一轮会把本轮问答加入上下文。
 
 ## 4. 数据和端口边界
 
@@ -84,3 +86,5 @@ enterprise-ai-platform/
 ## 5. 当前 AI 实现边界
 
 本版本通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问，支持流式回答。供应商与实际模型由服务端白名单和 `llm.env` 控制，前端只能选择供应商。Qdrant 当前仍使用演示向量；它不影响大模型回答、流式展示、PostgreSQL 答案持久化和 MinIO 结果归档。
+
+DeepSeek 和通义千问的 Chat Completions 接口本身不替本项目保存历史。平台以 `chat_conversations` 和 `ai_tasks` 持久化会话，每次最多加载 `AI_CONTEXT_TURNS` 轮完整问答，默认 10、最大 20，以控制 Token 成本。旧的单轮任务在 `004_add_chat_conversations.sql` 中自动转换为独立历史会话。

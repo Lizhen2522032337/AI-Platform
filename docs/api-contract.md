@@ -18,6 +18,10 @@
 | GET | `/api/users` | 200 | 管理员查询用户 |
 | POST | `/api/users` | 201 | 管理员创建用户 |
 | PATCH | `/api/users/:id` | 200 | 管理员修改角色、状态或密码 |
+| GET | `/api/conversations` | 200 | 查询当前用户最近 100 个会话 |
+| POST | `/api/conversations` | 201 | 创建空会话 |
+| GET | `/api/conversations/:id` | 200 | 查询会话及按时间排列的问答轮次 |
+| POST | `/api/conversations/:id/messages` | 202 | 在会话内发送消息并创建异步回答任务 |
 
 登录请求：
 
@@ -80,6 +84,23 @@
 
 状态只能是：`queued`、`processing`、`completed`、`failed`。
 
+创建会话：
+
+```json
+{ "modelProvider": "deepseek" }
+```
+
+发送下一轮消息：
+
+```json
+{
+  "content": "继续解释刚才提到的第二点",
+  "modelProvider": "deepseek"
+}
+```
+
+一个会话同一时间只允许一条消息处于 `queued/processing`；否则返回 409，避免第二轮在第一轮回答完成前丢失上下文。会话列表始终只返回当前登录人的数据，管理员用户管理功能不会自动展示其他人的私人会话。
+
 ### 1.2 Gin 实时接口
 
 | 方法 | 对外路径 | 说明 |
@@ -112,7 +133,12 @@ data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"dee
 {
   "taskId": 12,
   "prompt": "总结设备巡检记录",
-  "modelProvider": "deepseek"
+  "modelProvider": "deepseek",
+  "messages": [
+    { "role": "user", "content": "上一轮问题" },
+    { "role": "assistant", "content": "上一轮回答" },
+    { "role": "user", "content": "总结设备巡检记录" }
+  ]
 }
 ```
 
@@ -138,7 +164,23 @@ FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。
   "ownerId": 1,
   "prompt": "总结设备巡检记录",
   "modelProvider": "deepseek",
+  "conversationId": 8,
   "createdAt": "2026-07-26T12:00:00.000Z"
+}
+```
+
+Worker 根据 `conversationId` 从 PostgreSQL 读取最近 `AI_CONTEXT_TURNS` 轮已完成问答，并向 FastAPI 发送：
+
+```json
+{
+  "taskId": 12,
+  "prompt": "第二个问题",
+  "modelProvider": "deepseek",
+  "messages": [
+    { "role": "user", "content": "第一个问题" },
+    { "role": "assistant", "content": "第一个回答" },
+    { "role": "user", "content": "第二个问题" }
+  ]
 }
 ```
 

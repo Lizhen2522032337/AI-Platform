@@ -102,10 +102,51 @@ def update_task(
         )
 
 
+def load_conversation_messages(
+    conversation_id: int | None,
+    current_task_id: int,
+    current_prompt: str,
+) -> list[dict[str, str]]:
+    """读取最近若干轮完整历史，并追加当前问题；供应商 API 本身不保存上下文。"""
+
+    if conversation_id is None:
+        return [{"role": "user", "content": current_prompt}]
+    try:
+        context_turns = int(os.getenv("AI_CONTEXT_TURNS", "10"))
+    except ValueError:
+        context_turns = 10
+    context_turns = max(1, min(context_turns, 20))
+    with postgres_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT prompt, answer
+            FROM (
+                SELECT id, prompt, answer
+                FROM ai_tasks
+                WHERE conversation_id = %s
+                  AND id < %s
+                  AND status = 'completed'
+                  AND answer IS NOT NULL
+                ORDER BY id DESC
+                LIMIT %s
+            ) history
+            ORDER BY id
+            """,
+            (conversation_id, current_task_id, context_turns),
+        ).fetchall()
+    messages: list[dict[str, str]] = []
+    for prompt, answer in rows:
+        messages.append({"role": "user", "content": str(prompt)})
+        messages.append({"role": "assistant", "content": str(answer)})
+    messages.append({"role": "user", "content": current_prompt})
+    return messages
+
+
 def stream_ai_service(
     task_id: int,
     prompt: str,
     model_provider: str,
+    messages: list[dict[str, str]],
 ) -> Iterator[dict[str, Any]]:
     """逐行读取内部 FastAPI 返回的 NDJSON 大模型事件流。"""
 
@@ -115,6 +156,7 @@ def stream_ai_service(
             "taskId": task_id,
             "prompt": prompt,
             "modelProvider": model_provider,
+            "messages": messages,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
@@ -143,6 +185,10 @@ def process_message(body: bytes) -> None:
     owner_id = int(message.get("ownerId") or 0)
     prompt = str(message["prompt"])
     model_provider = str(message.get("modelProvider") or "deepseek")
+    conversation_id_value = message.get("conversationId")
+    conversation_id = (
+        int(conversation_id_value) if conversation_id_value is not None else None
+    )
     if model_provider not in {"deepseek", "qwen"}:
         raise RuntimeError("不支持的模型供应商")
     processing_state = {
@@ -151,6 +197,7 @@ def process_message(body: bytes) -> None:
         "status": "processing",
         "modelProvider": model_provider,
         "partialText": "",
+        "conversationId": conversation_id,
     }
     update_task(task_id, "processing")
     save_state(task_id, processing_state)
@@ -159,7 +206,8 @@ def process_message(body: bytes) -> None:
     model_name: str | None = None
     result: dict[str, Any] | None = None
     last_publish = 0.0
-    for event in stream_ai_service(task_id, prompt, model_provider):
+    messages = load_conversation_messages(conversation_id, task_id, prompt)
+    for event in stream_ai_service(task_id, prompt, model_provider, messages):
         event_type = event.get("type")
         if event_type == "start":
             model_name = str(event.get("model") or "") or None
@@ -209,6 +257,7 @@ def process_message(body: bytes) -> None:
             "status": "completed",
             "modelProvider": model_provider,
             "modelName": model_name,
+            "conversationId": conversation_id,
             "result": result,
         },
     )
@@ -278,10 +327,17 @@ def consume() -> None:
     ) -> None:
         task_id: int | None = None
         owner_id: int | None = None
+        conversation_id: int | None = None
+        model_provider: str | None = None
         try:
             decoded = json.loads(body.decode("utf-8"))
             task_id = int(decoded["id"])
             owner_id = int(decoded.get("ownerId") or 0)
+            conversation_value = decoded.get("conversationId")
+            conversation_id = (
+                int(conversation_value) if conversation_value is not None else None
+            )
+            model_provider = str(decoded.get("modelProvider") or "deepseek")
             process_message(body)
             current_channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as error:  # noqa: BLE001
@@ -296,6 +352,8 @@ def consume() -> None:
                             "id": task_id,
                             "ownerId": owner_id,
                             "status": "failed",
+                            "conversationId": conversation_id,
+                            "modelProvider": model_provider,
                             "errorMessage": message,
                         },
                     )

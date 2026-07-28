@@ -28,6 +28,7 @@ function sampleTask(): AiTask {
     modelName: null,
     answer: null,
     createdById: 7,
+    conversationId: null,
     createdAt: new Date('2026-07-26T00:00:00.000Z'),
     updatedAt: new Date('2026-07-26T00:00:00.000Z'),
   };
@@ -67,6 +68,7 @@ describe('TasksService', () => {
       ownerId: 7,
       prompt: task.prompt,
       modelProvider: 'deepseek',
+      conversationId: null,
       createdAt: '2026-07-26T00:00:00.000Z',
     });
     expect(redisService.setTaskState).toHaveBeenCalledWith(1, {
@@ -74,6 +76,7 @@ describe('TasksService', () => {
       ownerId: 7,
       status: 'queued',
       modelProvider: 'deepseek',
+      conversationId: null,
     });
   });
 

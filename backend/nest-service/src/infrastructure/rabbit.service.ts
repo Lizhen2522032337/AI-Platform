@@ -6,6 +6,7 @@ export interface AiTaskMessage {
   ownerId: number;
   prompt: string;
   modelProvider: 'deepseek' | 'qwen';
+  conversationId: number | null;
   createdAt: string;
 }
 

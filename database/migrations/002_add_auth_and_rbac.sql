@@ -80,9 +80,8 @@ BEGIN
             ADD CONSTRAINT ai_tasks_created_by_fkey
             FOREIGN KEY (created_by) REFERENCES app_users(id) ON DELETE SET NULL;
     END IF;
-END
+END;
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_ai_tasks_created_by_created_at
     ON ai_tasks (created_by, created_at DESC);
-

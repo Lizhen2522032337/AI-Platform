@@ -1,6 +1,6 @@
 # Enterprise AI Platform
 
-这是一个面向企业 AI 任务处理的容器化基础项目。NestJS 负责登录认证、角色权限和核心业务；React 只访问受保护的业务 API；耗时任务通过 RabbitMQ 交给 Worker；Worker 调用 FastAPI AI 服务；Gin 验证登录人和任务归属后通过 Redis 提供实时 SSE 状态。
+这是一个支持多轮对话的企业 AI 平台。NestJS 负责登录认证、角色权限、会话和核心业务；React 提供 ChatGPT 风格会话界面；每轮回答通过 RabbitMQ 交给 Worker；Worker 从 PostgreSQL 组装最近对话历史后调用 FastAPI；Gin 验证登录人和任务归属后通过 Redis 提供实时 SSE 增量回答。
 
 ```text
 React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI
@@ -15,9 +15,9 @@ React -> Nginx -> Gin realtime -> Redis
 
 | 服务 | 职责 | 对外路径 |
 | --- | --- | --- |
-| React | 用户界面 | `/` |
+| React | 多轮聊天、会话侧栏和管理员界面 | `/` |
 | Nginx | 唯一入口与反向代理 | `:80` |
-| NestJS | 登录、RBAC、用户管理、任务创建和查询 | `/api/` |
+| NestJS | 登录、RBAC、用户管理、会话与任务创建和查询 | `/api/` |
 | Gin | JWT 与任务归属校验、SSE 实时状态 | `/realtime/` |
 | FastAPI | 调用 DeepSeek/千问、统一流式输出、向量与结果文件 | 仅 Docker 内网 |
 | Worker | 消费 RabbitMQ 并协调 AI 处理 | 仅 Docker 内网 |

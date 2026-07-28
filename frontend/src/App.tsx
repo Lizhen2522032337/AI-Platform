@@ -1,28 +1,40 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react'
 import { authApi } from './api/auth'
+import { conversationsApi } from './api/conversations'
 import { tasksApi } from './api/tasks'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { LoginScreen } from './components/LoginScreen'
 import type { AuthUser } from './types/auth'
-import type { AiTask, ModelProvider, TaskEvent, TaskStatus } from './types/task'
+import type { ChatConversation } from './types/conversation'
+import type { AiTask, ModelProvider, TaskEvent } from './types/task'
 import './App.css'
 
-const statusText: Record<TaskStatus, string> = {
-  queued: '等待处理',
-  processing: '处理中',
-  completed: '已完成',
-  failed: '失败',
+function modelLabel(provider: ModelProvider) {
+  return provider === 'qwen' ? '通义千问' : 'DeepSeek'
 }
 
 function App() {
   const [sessionLoading, setSessionLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [conversations, setConversations] = useState<ChatConversation[]>([])
+  const [activeConversationId, setActiveConversationId] = useState<number | null>(null)
+  const [tasks, setTasks] = useState<AiTask[]>([])
   const [prompt, setPrompt] = useState('')
   const [modelProvider, setModelProvider] = useState<ModelProvider>('deepseek')
-  const [tasks, setTasks] = useState<AiTask[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [showAdmin, setShowAdmin] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const messageEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     authApi.me()
@@ -34,6 +46,7 @@ function App() {
   useEffect(() => {
     const expire = () => {
       setUser(null)
+      setConversations([])
       setTasks([])
       setError('登录已过期，请重新登录。')
     }
@@ -41,94 +54,145 @@ function App() {
     return () => window.removeEventListener('auth:expired', expire)
   }, [])
 
-  const loadTasks = useCallback(async () => {
+  const loadConversations = useCallback(async () => {
     if (!user) return
     try {
-      const freshTasks = await tasksApi.list()
-      setTasks((current) =>
-        freshTasks.map((task) => ({
-          ...task,
-          partialText: current.find((item) => item.id === task.id)?.partialText,
-        })),
+      const items = await conversationsApi.list()
+      setConversations(items)
+      setActiveConversationId((current) =>
+        current && items.some((item) => item.id === current)
+          ? current
+          : (items[0]?.id ?? null),
       )
-      setError('')
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '任务加载失败')
-    } finally {
-      setLoading(false)
+      setError(requestError instanceof Error ? requestError.message : '会话加载失败')
     }
   }, [user])
 
   useEffect(() => {
-    if (!user) return
-    const initial = window.setTimeout(() => void loadTasks(), 0)
-    const timer = window.setInterval(() => void loadTasks(), 10000)
-    return () => {
-      window.clearTimeout(initial)
-      window.clearInterval(timer)
+    const timer = window.setTimeout(() => void loadConversations(), 0)
+    return () => window.clearTimeout(timer)
+  }, [loadConversations])
+
+  const loadConversation = useCallback(async () => {
+    if (!activeConversationId || showAdmin) return
+    setLoading(true)
+    try {
+      const detail = await conversationsApi.detail(activeConversationId)
+      setTasks((current) =>
+        detail.tasks.map((task) => ({
+          ...task,
+          partialText: current.find((item) => item.id === task.id)?.partialText,
+        })),
+      )
+      setModelProvider(detail.conversation.modelProvider)
+      setError('')
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '消息加载失败')
+    } finally {
+      setLoading(false)
     }
-  }, [loadTasks, user])
+  }, [activeConversationId, showAdmin])
 
-  const activeTaskIds = useMemo(
-    () => tasks
-      .filter((task) => task.status === 'queued' || task.status === 'processing')
-      .map((task) => task.id)
-      .join(','),
-    [tasks],
-  )
-
-  // Gin 验证 HttpOnly Cookie 后提供 SSE；连接异常时仍有定时刷新兜底。
   useEffect(() => {
-    if (!user || !activeTaskIds) return
-    const sources = activeTaskIds.split(',').map((taskId) => {
-      const source = new EventSource(tasksApi.eventsUrl(Number(taskId)), {
-        withCredentials: true,
-      })
-      source.addEventListener('task', (event) => {
-        const update = JSON.parse((event as MessageEvent<string>).data) as TaskEvent
-        setTasks((current) =>
-          current.map((task) =>
-            task.id === update.id
-              ? {
-                  ...task,
-                  status: update.status,
-                  modelName: update.modelName ?? task.modelName,
-                  partialText: update.partialText ?? task.partialText,
-                  result: update.result ?? task.result,
-                  answer: update.result?.text ?? task.answer,
-                  errorMessage: update.errorMessage ?? task.errorMessage,
-                }
-              : task,
-          ),
-        )
-        if (update.status === 'completed' || update.status === 'failed') {
-          source.close()
-          void loadTasks()
-        }
-      })
-      source.onerror = () => source.close()
-      return source
-    })
-    return () => sources.forEach((source) => source.close())
-  }, [activeTaskIds, loadTasks, user])
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const cleanPrompt = prompt.trim()
-    if (!cleanPrompt) {
-      setError('请输入任务内容。')
+    if (!activeConversationId || showAdmin) {
       return
     }
+    const initial = window.setTimeout(() => void loadConversation(), 0)
+    const poll = window.setInterval(() => void loadConversation(), 10000)
+    return () => {
+      window.clearTimeout(initial)
+      window.clearInterval(poll)
+    }
+  }, [activeConversationId, loadConversation, showAdmin])
+
+  const activeTask = useMemo(
+    () => tasks.find((task) => task.status === 'queued' || task.status === 'processing'),
+    [tasks],
+  )
+  const activeTaskId = activeTask?.id
+
+  useEffect(() => {
+    if (!activeTaskId) return
+    const source = new EventSource(tasksApi.eventsUrl(activeTaskId), {
+      withCredentials: true,
+    })
+    source.addEventListener('task', (event) => {
+      const update = JSON.parse((event as MessageEvent<string>).data) as TaskEvent
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === update.id
+            ? {
+                ...task,
+                status: update.status,
+                modelName: update.modelName ?? task.modelName,
+                partialText: update.partialText ?? task.partialText,
+                result: update.result ?? task.result,
+                answer: update.result?.text ?? task.answer,
+                errorMessage: update.errorMessage ?? task.errorMessage,
+              }
+            : task,
+        ),
+      )
+      if (update.status === 'completed' || update.status === 'failed') {
+        source.close()
+        void loadConversation()
+        void loadConversations()
+      }
+    })
+    source.onerror = () => source.close()
+    return () => source.close()
+  }, [activeTaskId, loadConversation, loadConversations])
+
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [tasks])
+
+  function beginNewChat() {
+    setActiveConversationId(null)
+    setTasks([])
+    setPrompt('')
+    setError('')
+    setShowAdmin(false)
+    setSidebarOpen(false)
+  }
+
+  async function submit(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault()
+    const content = prompt.trim()
+    if (!content || submitting || activeTask) return
     setSubmitting(true)
     setError('')
     try {
-      const task = await tasksApi.create(cleanPrompt, modelProvider)
-      setTasks((current) => [task, ...current])
+      let conversationId = activeConversationId
+      if (!conversationId) {
+        const conversation = await conversationsApi.create(modelProvider)
+        conversationId = conversation.id
+        setActiveConversationId(conversation.id)
+        setConversations((current) => [conversation, ...current])
+      }
+      const response = await conversationsApi.sendMessage(
+        conversationId,
+        content,
+        modelProvider,
+      )
+      setTasks((current) => [...current, response.task])
+      setConversations((current) => [
+        response.conversation,
+        ...current.filter((item) => item.id !== response.conversation.id),
+      ])
       setPrompt('')
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '任务提交失败')
+      setError(requestError instanceof Error ? requestError.message : '消息发送失败')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void submit()
     }
   }
 
@@ -137,13 +201,13 @@ function App() {
       await authApi.logout()
     } finally {
       setUser(null)
+      setConversations([])
       setTasks([])
       setError('')
     }
   }
 
   function acceptLogin(authenticated: AuthUser) {
-    setLoading(true)
     setUser(authenticated)
     setError('')
   }
@@ -155,106 +219,161 @@ function App() {
 
   const canCreateTask = user.permissions.includes('tasks:create')
   const canManageUsers = user.permissions.includes('users:manage')
+  const activeConversation = conversations.find((item) => item.id === activeConversationId)
 
   return (
-    <main className="app-shell">
-      <header className="hero-panel">
-        <div>
-          <p className="eyebrow">ENTERPRISE AI PLATFORM</p>
-          <h1>企业 AI 异步任务控制台</h1>
-          <p className="hero-copy">
-            NestJS 统一认证和鉴权，RabbitMQ 分发任务，Worker 调用 FastAPI，
-            Gin 通过 Redis 推送当前用户有权查看的实时状态。
-          </p>
+    <main className="chat-app">
+      {sidebarOpen && <button className="sidebar-scrim" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} type="button" />}
+      <aside className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="brand-row">
+          <div className="brand-mark">EA</div>
+          <strong>Enterprise AI</strong>
+          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} type="button">×</button>
         </div>
-        <div className="account-box">
-          <span className="status-chip"><span className="status-dot" />系统在线</span>
-          <div><strong>{user.displayName}</strong><small>{user.role === 'admin' ? '管理员' : '普通用户'} · {user.username}</small></div>
-          <button className="button account-logout" onClick={() => void logout()} type="button">退出</button>
-        </div>
-      </header>
+        <button className="new-chat-button" onClick={beginNewChat} type="button">
+          <span>＋</span> 新对话
+        </button>
 
-      <section className="architecture panel" aria-label="系统处理链路">
-        {['React', 'Nginx', 'NestJS 鉴权', 'RabbitMQ', 'Worker', 'FastAPI', 'DeepSeek · 千问', 'Qdrant · MinIO'].map(
-          (name, index, all) => (
-            <div className="flow-step" key={name}>
-              <span>{name}</span>{index < all.length - 1 && <b>→</b>}
-            </div>
-          ),
-        )}
-      </section>
+        <div className="sidebar-label">最近对话</div>
+        <nav className="conversation-list" aria-label="会话列表">
+          {conversations.length === 0 ? (
+            <p className="sidebar-empty">还没有对话</p>
+          ) : conversations.map((conversation) => (
+            <button
+              className={`conversation-link ${!showAdmin && conversation.id === activeConversationId ? 'active' : ''}`}
+              key={conversation.id}
+              onClick={() => {
+                setShowAdmin(false)
+                setActiveConversationId(conversation.id)
+                setTasks([])
+                setSidebarOpen(false)
+              }}
+              title={conversation.title}
+              type="button"
+            >
+              <span className="conversation-icon">◇</span>
+              <span>{conversation.title}</span>
+            </button>
+          ))}
+        </nav>
 
-      <div className="workspace-grid">
-        {canCreateTask && (
-          <section className="panel">
-            <p className="eyebrow">NEW AI TASK</p>
-            <h2>提交处理任务</h2>
-            <form className="task-form" onSubmit={submit}>
-              <label htmlFor="prompt">任务内容</label>
-              <textarea
-                id="prompt"
-                maxLength={4000}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="例如：总结这份设备巡检记录并提取风险点"
-                rows={8}
-                value={prompt}
-              />
-              <label htmlFor="model-provider">选择大模型</label>
-              <select
-                id="model-provider"
-                onChange={(event) => setModelProvider(event.target.value as ModelProvider)}
-                value={modelProvider}
-              >
-                <option value="deepseek">DeepSeek</option>
-                <option value="qwen">通义千问</option>
-              </select>
-              <button className="button primary" disabled={submitting} type="submit">
-                {submitting ? '正在提交…' : '提交到 RabbitMQ'}
-              </button>
-            </form>
-            {error && <div className="error-banner" role="alert">{error}</div>}
-          </section>
-        )}
-
-        <section className="panel records-panel">
-          <div className="section-heading">
-            <div><p className="eyebrow">TASK STREAM</p><h2>{user.role === 'admin' ? '全部任务状态' : '我的任务状态'}</h2></div>
-            <button className="button ghost" onClick={() => void loadTasks()} type="button">刷新</button>
+        <div className="sidebar-footer">
+          {canManageUsers && (
+            <button
+              className={`sidebar-action ${showAdmin ? 'active' : ''}`}
+              onClick={() => {
+                setShowAdmin(true)
+                setTasks([])
+                setSidebarOpen(false)
+              }}
+              type="button"
+            >
+              <span>⚙</span> 用户与权限
+            </button>
+          )}
+          <div className="account-row">
+            <div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div>
+            <div><strong>{user.displayName}</strong><small>{user.role === 'admin' ? '管理员' : '普通用户'}</small></div>
+            <button className="logout-button" onClick={() => void logout()} title="退出登录" type="button">↪</button>
           </div>
-          {!canCreateTask && error && <div className="error-banner" role="alert">{error}</div>}
-          {loading ? <div className="empty-state">正在加载…</div> : tasks.length === 0 ? (
-            <div className="empty-state">暂无任务。</div>
-          ) : (
-            <div className="task-list">
-              {tasks.map((task) => (
-                <article className="task-card" key={task.id}>
-                  <div className="task-card-head">
-                    <strong>#{task.id}{user.role === 'admin' && task.createdById ? ` · 用户 ${task.createdById}` : ''}</strong>
-                    <div className="task-badges">
-                      <span className="model-badge">
-                        {task.modelProvider === 'qwen' ? '通义千问' : 'DeepSeek'}
-                        {task.modelName ? ` · ${task.modelName}` : ''}
-                      </span>
-                      <span className={`task-status ${task.status}`}>{statusText[task.status]}</span>
+        </div>
+      </aside>
+
+      <section className="chat-main">
+        <header className="chat-header">
+          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} type="button">☰</button>
+          <div className="header-title">
+            <strong>{showAdmin ? '用户与权限' : (activeConversation?.title ?? '新对话')}</strong>
+            {!showAdmin && <small>{activeTask ? 'AI 正在回答…' : '消息通过企业异步链路安全处理'}</small>}
+          </div>
+          {!showAdmin && (
+            <select
+              aria-label="选择大模型"
+              className="model-select"
+              disabled={Boolean(activeTask)}
+              onChange={(event) => setModelProvider(event.target.value as ModelProvider)}
+              value={modelProvider}
+            >
+              <option value="deepseek">DeepSeek</option>
+              <option value="qwen">通义千问</option>
+            </select>
+          )}
+        </header>
+
+        {showAdmin ? (
+          <div className="admin-view"><AdminUsersPanel currentUserId={user.id} /></div>
+        ) : (
+          <>
+            <div className="messages-scroll">
+              <div className="messages-column">
+                {!activeConversationId || (tasks.length === 0 && !loading) ? (
+                  <div className="chat-welcome">
+                    <div className="welcome-mark">EA</div>
+                    <h1>今天想聊些什么？</h1>
+                    <p>选择 DeepSeek 或通义千问，开始一段可持续的多轮对话。</p>
+                    <div className="suggestion-grid">
+                      {['总结一份企业文档', '帮我分析一个技术问题', '制定项目实施计划', '解释一段代码'].map((text) => (
+                        <button key={text} onClick={() => setPrompt(text)} type="button">{text}</button>
+                      ))}
                     </div>
                   </div>
-                  <p>{task.prompt}</p>
-                  {(task.partialText || task.answer || task.result?.text) && (
-                    <div className={`result-box ${task.status === 'processing' ? 'streaming' : ''}`}>
-                      {task.partialText || task.answer || task.result?.text}
-                      {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
+                ) : loading && tasks.length === 0 ? (
+                  <div className="chat-loading">正在加载消息…</div>
+                ) : tasks.map((task) => {
+                  const answer = task.partialText || task.answer || task.result?.text
+                  return (
+                    <div className="conversation-turn" key={task.id}>
+                      <div className="message-row user-message">
+                        <div className="message-avatar user-avatar">{user.displayName.slice(0, 1)}</div>
+                        <div className="message-content"><div className="message-meta">你</div><div className="message-text">{task.prompt}</div></div>
+                      </div>
+                      <div className="message-row assistant-message">
+                        <div className="message-avatar assistant-avatar">EA</div>
+                        <div className="message-content">
+                          <div className="message-meta">Enterprise AI <span>{modelLabel(task.modelProvider)}{task.modelName ? ` · ${task.modelName}` : ''}</span></div>
+                          <div className="message-text assistant-text">
+                            {answer || (task.status === 'failed' ? '本次回答失败。' : '正在思考…')}
+                            {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
+                          </div>
+                          {task.errorMessage && <div className="message-error">{task.errorMessage}</div>}
+                        </div>
+                      </div>
                     </div>
-                  )}
-                  {task.errorMessage && <div className="inline-error">{task.errorMessage}</div>}
-                  <small>{new Date(task.updatedAt).toLocaleString('zh-CN')}</small>
-                </article>
-              ))}
+                  )
+                })}
+                <div ref={messageEndRef} />
+              </div>
             </div>
-          )}
-        </section>
-      </div>
 
-      {canManageUsers && <AdminUsersPanel currentUserId={user.id} />}
+            {canCreateTask && (
+              <div className="composer-zone">
+                {error && <div className="composer-error" role="alert">{error}</div>}
+                <form className="chat-composer" onSubmit={(event) => void submit(event)}>
+                  <textarea
+                    aria-label="发送消息"
+                    disabled={Boolean(activeTask)}
+                    maxLength={4000}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={composerKeyDown}
+                    placeholder={activeTask ? '请等待当前回答完成…' : '给 Enterprise AI 发送消息'}
+                    rows={1}
+                    value={prompt}
+                  />
+                  <button
+                    aria-label="发送"
+                    className="send-button"
+                    disabled={!prompt.trim() || submitting || Boolean(activeTask)}
+                    type="submit"
+                  >
+                    {submitting ? '…' : '↑'}
+                  </button>
+                </form>
+                <small className="composer-hint">Enter 发送，Shift + Enter 换行 · 当前模型：{modelLabel(modelProvider)}</small>
+              </div>
+            )}
+          </>
+        )}
+      </section>
     </main>
   )
 }

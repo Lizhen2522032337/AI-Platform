@@ -3,7 +3,7 @@
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import httpx
 
@@ -11,6 +11,13 @@ from app.config.settings import Settings, get_settings
 
 
 ModelProvider = Literal["deepseek", "qwen"]
+
+
+class ChatMessage(TypedDict):
+    """发送给大模型的标准历史消息。"""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 @dataclass(frozen=True)
@@ -53,7 +60,7 @@ def provider_config(provider: ModelProvider, settings: Settings | None = None) -
 
 async def stream_chat(
     provider: ModelProvider,
-    prompt: str,
+    messages: list[ChatMessage],
 ) -> AsyncIterator[dict[str, Any]]:
     """调用供应商的 Chat Completions SSE，并产出统一的增量事件。"""
 
@@ -66,7 +73,7 @@ async def stream_chat(
                 "role": "system",
                 "content": "你是企业 AI 助手。请准确、清晰地回答用户问题；不知道时明确说明。",
             },
-            {"role": "user", "content": prompt},
+            *messages,
         ],
         "stream": True,
         "stream_options": {"include_usage": True},

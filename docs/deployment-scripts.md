@@ -100,6 +100,7 @@ RABBITMQ_DEFAULT_VHOST=enterprise_ai
 RABBITMQ_TASK_QUEUE=ai_tasks
 
 AI_SERVICE_URL=http://fastapi-service:8000
+AI_CONTEXT_TURNS=10
 
 JWT_SECRET=替换成至少64位随机密钥
 JWT_ISSUER=enterprise-ai-platform
@@ -119,6 +120,8 @@ MINIO_USE_SSL=false
 
 LOG_LEVEL=INFO
 ```
+
+`AI_CONTEXT_TURNS` 控制每次多轮请求携带的最近完整问答轮数，允许 1-20，默认建议 10。轮数越大，上下文更完整，但输入 Token 和费用也会增加。
 
 可用 `openssl rand -hex 48` 生成 JWT 随机密钥。当前通过 HTTP 访问所以 `COOKIE_SECURE=false`；配置 HTTPS 后必须改为 `true`。
 
