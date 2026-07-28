@@ -18,6 +18,7 @@ fi
 readonly COMPOSE_FILE="${REPO_ROOT}/deploy/docker-compose.yml"
 readonly DATABASE_ENV_FILE="${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}"
 readonly PLATFORM_ENV_FILE="${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}"
+readonly LLM_ENV_FILE="${LLM_ENV_FILE:-/etc/enterprise-ai-platform/llm.env}"
 readonly DATABASE_MODE="${DATABASE_MODE:-managed}"
 readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
 readonly DEPLOY_LOCK_DIR="${DEPLOY_STATE_DIR}/deploy.lock"
@@ -25,7 +26,7 @@ readonly -a INFRASTRUCTURE_SERVICES=(redis rabbitmq qdrant minio)
 readonly -a APPLICATION_SERVICES=(frontend fastapi-service nest-service gin-service worker)
 readonly -a BACKEND_SERVICES=(fastapi-service nest-service gin-service worker)
 readonly -a DATABASE_SERVICES=(nest-service worker)
-export DATABASE_ENV_FILE PLATFORM_ENV_FILE
+export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -88,7 +89,7 @@ ensure_database_env() {
     esac
 
     if [[ "${DATABASE_MODE}" == 'managed' ]]; then
-        configured_host="$(awk -F= '/^[[:space:]]*POSTGRES_HOST=/{sub(/^[^=]*=/, ""); gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, ""); print; exit}' "${DATABASE_ENV_FILE}")"
+        configured_host="$(awk -F= '/^[[:space:]]*POSTGRES_HOST=/{sub(/^[^=]*=/, ""); gsub(/^[[:space:"]+|[[:space:"]+$/, ""); print; exit}' "${DATABASE_ENV_FILE}")"
         [[ "${configured_host}" == 'postgres' ]] \
             || die 'managed 模式要求 database.env 中 POSTGRES_HOST=postgres'
     fi
@@ -113,6 +114,26 @@ ensure_platform_env() {
     done
     grep -Eqi 'change_me|请替换|实际密码|your_password' "${PLATFORM_ENV_FILE}" \
         && die "${PLATFORM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
+
+    ensure_llm_env
+}
+
+ensure_llm_env() {
+    local key
+    local -a required_keys=(
+        DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_MODEL
+        QWEN_API_KEY QWEN_BASE_URL QWEN_MODEL
+        LLM_REQUEST_TIMEOUT_SECONDS LLM_MAX_TOKENS
+    )
+
+    [[ -f "${LLM_ENV_FILE}" ]] || die "找不到独立大模型配置：${LLM_ENV_FILE}"
+    [[ -r "${LLM_ENV_FILE}" ]] || die "当前用户无法读取大模型配置：${LLM_ENV_FILE}"
+    for key in "${required_keys[@]}"; do
+        grep -Eq "^[[:space:]]*${key}=.+$" "${LLM_ENV_FILE}" \
+            || die "${LLM_ENV_FILE} 缺少 ${key}"
+    done
+    grep -Eqi 'change_me|请替换|你的工作空间|your[_-]?api|sk-xxx' "${LLM_ENV_FILE}" \
+        && die "${LLM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
 }
 
 compose() {
