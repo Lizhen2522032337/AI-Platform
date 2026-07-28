@@ -119,7 +119,7 @@ ensure_platform_env() {
 }
 
 ensure_llm_env() {
-    # local key
+    local key
     # local -a required_keys=(
     #     DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_MODEL
     #     QWEN_API_KEY QWEN_BASE_URL QWEN_MODEL
