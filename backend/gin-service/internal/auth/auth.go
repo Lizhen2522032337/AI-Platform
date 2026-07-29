@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,8 +76,10 @@ func New(secret, issuer, audience, cookieName string, versions VersionStore) *Au
 
 func (a *Authenticator) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 浏览器通常使用 HttpOnly Cookie，服务间调用也可使用 Authorization Bearer Token。
 		raw := a.tokenFromRequest(c)
 		if raw == "" {
+			log.Printf("authentication rejected: reason=missing_token client=%s", c.ClientIP())
 			abort(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 			return
 		}
@@ -93,11 +96,13 @@ func (a *Authenticator) Require() gin.HandlerFunc {
 		)
 		userID, idError := strconv.Atoi(claims.Subject)
 		if err != nil || idError != nil || userID <= 0 || !parsed.Valid {
+			log.Printf("authentication rejected: reason=invalid_or_expired client=%s", c.ClientIP())
 			abort(c, http.StatusUnauthorized, "UNAUTHORIZED", "token invalid or expired")
 			return
 		}
 		version, versionError := a.versions.TokenVersion(c.Request.Context(), userID)
 		if versionError != nil || version != claims.Version {
+			log.Printf("authentication rejected: reason=session_revoked user_id=%d", userID)
 			abort(c, http.StatusUnauthorized, "UNAUTHORIZED", "session has been revoked")
 			return
 		}
@@ -115,6 +120,7 @@ func (a *Authenticator) Require() gin.HandlerFunc {
 			ExpiresAt:    claims.ExpiresAt.Time,
 		})
 		c.Set(sessionStoreKey, a.versions)
+		log.Printf("authentication accepted: user_id=%d role=%s", userID, claims.Role)
 		c.Next()
 	}
 }
@@ -134,6 +140,7 @@ func SetPrincipal(c *gin.Context, principal Principal) {
 }
 
 func CanReadTask(c *gin.Context, ownerID int) bool {
+	// tasks:read:any 用于管理员审计；其他用户必须同时拥有 read:own 且 ownerID 匹配。
 	principal, ok := PrincipalFrom(c)
 	if !ok {
 		return false
@@ -161,6 +168,7 @@ func SessionValid(c *gin.Context) bool {
 }
 
 func (a *Authenticator) tokenFromRequest(c *gin.Context) string {
+	// Authorization 优先于 Cookie，便于未来接入可信的服务端调用方。
 	header := c.GetHeader("Authorization")
 	if strings.HasPrefix(header, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))

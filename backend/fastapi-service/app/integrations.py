@@ -3,12 +3,16 @@
 import hashlib
 import io
 import json
+import logging
 from functools import lru_cache
 
 from minio import Minio
 from qdrant_client import QdrantClient, models
 
 from app.config.settings import get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache
@@ -36,10 +40,14 @@ def check_integrations() -> None:
 
     qdrant_client().get_collections()
     minio_client().list_buckets()
+    logger.debug("AI storage dependency health check succeeded")
 
 
 def _vector_for(text: str) -> list[float]:
-    """生成固定 8 维演示向量；以后可替换为真实 Embedding 模型。"""
+    """生成固定 8 维演示向量。
+
+    这是可重复的占位实现，不具备语义检索能力；Dify 承担当前真正的知识检索。
+    """
 
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     return [round(value / 255, 6) for value in digest[:8]]
@@ -62,6 +70,11 @@ def save_result(
 
     qdrant = qdrant_client()
     if not qdrant.collection_exists(settings.qdrant_collection):
+        logger.info(
+            "creating Qdrant collection: collection=%s dimensions=%d",
+            settings.qdrant_collection,
+            len(vector),
+        )
         qdrant.create_collection(
             collection_name=settings.qdrant_collection,
             vectors_config=models.VectorParams(
@@ -85,6 +98,7 @@ def save_result(
         ],
         wait=True,
     )
+    logger.info("Qdrant result indexed: task_id=%s vector_id=%s", task_id, vector_id)
 
     result = {
         "taskId": task_id,
@@ -98,6 +112,7 @@ def save_result(
     payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
     storage = minio_client()
     if not storage.bucket_exists(settings.minio_bucket):
+        logger.info("creating MinIO bucket: bucket=%s", settings.minio_bucket)
         storage.make_bucket(settings.minio_bucket)
     storage.put_object(
         settings.minio_bucket,
@@ -105,5 +120,12 @@ def save_result(
         io.BytesIO(payload),
         length=len(payload),
         content_type="application/json",
+    )
+    logger.info(
+        "MinIO result saved: task_id=%s bucket=%s object_key=%s bytes=%d",
+        task_id,
+        settings.minio_bucket,
+        object_key,
+        len(payload),
     )
     return result

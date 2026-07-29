@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -77,6 +78,7 @@ func (h *Handler) health(c *gin.Context) {
 }
 
 func taskKey(c *gin.Context) (string, bool) {
+	// 入口统一校验正整数，避免构造任意 Redis Key。
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
@@ -105,6 +107,7 @@ func (h *Handler) current(c *gin.Context) {
 	if !ok {
 		return
 	}
+	log.Printf("current task state returned: key=%s", key)
 	c.Data(http.StatusOK, "application/json; charset=utf-8", payload)
 }
 
@@ -113,6 +116,9 @@ func (h *Handler) events(c *gin.Context) {
 	if !ok {
 		return
 	}
+	log.Printf("SSE connection opened: key=%s", key)
+	defer log.Printf("SSE connection closed: key=%s", key)
+	// 禁止 Nginx 缓冲，否则大模型增量会积累后一次性显示。
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -129,7 +135,9 @@ func (h *Handler) events(c *gin.Context) {
 	defer ticker.Stop()
 
 	for {
+		// 长连接建立后仍周期检查 JWT 过期时间和 Redis tokenVersion。
 		if !auth.SessionValid(c) {
+			log.Printf("SSE session expired or revoked: key=%s", key)
 			return
 		}
 		value, err := h.store.Get(c.Request.Context(), key)
@@ -145,6 +153,7 @@ func (h *Handler) events(c *gin.Context) {
 				Status string `json:"status"`
 			}
 			if json.Unmarshal([]byte(value), &state) == nil && (state.Status == "completed" || state.Status == "failed") {
+				log.Printf("SSE terminal state delivered: key=%s status=%s", key, state.Status)
 				return
 			}
 		}
@@ -157,6 +166,7 @@ func (h *Handler) events(c *gin.Context) {
 }
 
 func authorizedPayload(c *gin.Context, value string) ([]byte, bool) {
+	// ownerId 只用于服务端鉴权，发送给浏览器前必须移除。
 	var state map[string]any
 	if err := json.Unmarshal([]byte(value), &state); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{

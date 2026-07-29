@@ -8,6 +8,7 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ onLogin, message }: LoginScreenProps) {
+  // 密码只存在于组件内存，登录完成后立即清空，不写入浏览器存储。
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -20,8 +21,10 @@ export function LoginScreen({ onLogin, message }: LoginScreenProps) {
     try {
       const result = await authApi.login(username.trim(), password)
       setPassword('')
+      console.info('[login] authentication succeeded', { userId: result.user.id })
       onLogin(result.user)
     } catch (requestError) {
+      console.warn('[login] authentication rejected')
       setError(requestError instanceof Error ? requestError.message : '登录失败')
     } finally {
       setSubmitting(false)

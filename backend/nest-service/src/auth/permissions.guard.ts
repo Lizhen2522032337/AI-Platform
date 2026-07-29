@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
@@ -14,6 +15,8 @@ type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
+  private readonly logger = new Logger(PermissionsGuard.name);
+
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
@@ -29,6 +32,9 @@ export class PermissionsGuard implements CanActivate {
     if (user && required.some((permission) => user.permissions.includes(permission))) {
       return true;
     }
+    this.logger.warn(
+      `permission denied: user_id=${user?.id ?? 'unknown'} required_any=${required.join(',')}`,
+    );
     throw new ForbiddenException(
       errorBody('FORBIDDEN', 'insufficient permission'),
     );

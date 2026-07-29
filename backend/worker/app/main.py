@@ -55,7 +55,10 @@ redis_client = redis.Redis(
 
 
 def save_state(task_id: int, state: dict[str, Any]) -> None:
-    """把最新任务状态写入 Redis，供 Gin 实时接口读取。"""
+    """把最新任务状态写入 Redis，供 Gin 实时接口读取。
+
+    此函数处于流式热路径，不逐次打印日志，否则每个回答会产生大量重复输出。
+    """
 
     redis_client.setex(
         f"task:{task_id}",
@@ -73,7 +76,7 @@ def update_task(
     answer: str | None = None,
     model_name: str | None = None,
 ) -> None:
-    """更新任务持久化状态。"""
+    """更新 PostgreSQL 最终事实记录；Redis 只保存可过期的实时快照。"""
 
     with postgres_connection() as connection:
         connection.execute(
@@ -100,6 +103,7 @@ def update_task(
                 task_id,
             ),
         )
+    logger.info("task database state updated: task_id=%s status=%s", task_id, status)
 
 
 def load_conversation_messages(
@@ -110,6 +114,10 @@ def load_conversation_messages(
     """读取最近若干轮完整历史，并追加当前问题；供应商 API 本身不保存上下文。"""
 
     if conversation_id is None:
+        logger.info(
+            "conversation context prepared: task_id=%s conversation_id=none history_turns=0",
+            current_task_id,
+        )
         return [{"role": "user", "content": current_prompt}]
     try:
         context_turns = int(os.getenv("AI_CONTEXT_TURNS", "10"))
@@ -139,6 +147,12 @@ def load_conversation_messages(
         messages.append({"role": "user", "content": str(prompt)})
         messages.append({"role": "assistant", "content": str(answer)})
     messages.append({"role": "user", "content": current_prompt})
+    logger.info(
+        "conversation context prepared: task_id=%s conversation_id=%s history_turns=%s",
+        current_task_id,
+        conversation_id,
+        len(rows),
+    )
     return messages
 
 
@@ -165,6 +179,12 @@ def stream_ai_service(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    logger.info(
+        "FastAPI stream request started: task_id=%s provider=%s messages=%s",
+        task_id,
+        model_provider,
+        len(messages),
+    )
     with urllib.request.urlopen(request, timeout=360) as response:
         for raw_line in response:
             line = raw_line.decode("utf-8").strip()
@@ -174,6 +194,7 @@ def stream_ai_service(
             if not isinstance(event, dict) or "type" not in event:
                 raise RuntimeError("AI 服务返回了无效事件")
             yield event
+    logger.info("FastAPI stream request ended: task_id=%s", task_id)
 
 
 def process_message(body: bytes) -> None:
@@ -191,6 +212,14 @@ def process_message(body: bytes) -> None:
     )
     if model_provider not in {"deepseek", "qwen"}:
         raise RuntimeError("不支持的模型供应商")
+    logger.info(
+        "task message received: task_id=%s owner_id=%s conversation_id=%s provider=%s prompt_chars=%s",
+        task_id,
+        owner_id,
+        conversation_id,
+        model_provider,
+        len(prompt),
+    )
     processing_state = {
         "id": task_id,
         "ownerId": owner_id,
@@ -211,6 +240,11 @@ def process_message(body: bytes) -> None:
         event_type = event.get("type")
         if event_type == "start":
             model_name = str(event.get("model") or "") or None
+            logger.info(
+                "AI generation started: task_id=%s model=%s",
+                task_id,
+                model_name or "unknown",
+            )
         elif event_type == "delta":
             text = str(event.get("text") or "")
             if not text:
@@ -309,6 +343,7 @@ def consume() -> None:
         heartbeat=30,
         blocked_connection_timeout=30,
     )
+    logger.info("connecting to RabbitMQ: host=%s port=%s", parameters.host, parameters.port)
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
     queue = os.getenv("RABBITMQ_TASK_QUEUE", "ai_tasks")
@@ -318,6 +353,7 @@ def consume() -> None:
         arguments={"x-queue-type": "quorum"},
     )
     channel.basic_qos(prefetch_count=1)
+    # prefetch=1 保证单个 Worker 一次只处理一个任务，避免流式请求挤占内存。
 
     def callback(
         current_channel: pika.channel.Channel,
@@ -365,7 +401,7 @@ def consume() -> None:
     channel.basic_consume(queue=queue, on_message_callback=callback)
     redis_client.ping()
     worker_ready = True
-    logger.info("worker is ready; queue=%s", queue)
+    logger.info("worker is ready: queue=%s prefetch=1", queue)
     channel.start_consuming()
 
 

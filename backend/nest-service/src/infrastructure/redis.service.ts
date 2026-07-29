@@ -1,8 +1,9 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createClient } from 'redis';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
   private readonly client = createClient({
     socket: {
       host: process.env.REDIS_HOST ?? 'redis',
@@ -13,14 +14,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     this.client.on('error', (error) => {
-      console.error('Redis client error', error);
+      this.logger.error(
+        `Redis client error: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
     });
     await this.client.connect();
+    this.logger.log('Redis connection ready');
   }
 
   async onModuleDestroy(): Promise<void> {
     if (this.client.isOpen) {
       await this.client.close();
+      this.logger.log('Redis connection closed');
     }
   }
 
@@ -29,6 +34,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async setTaskState(taskId: number, value: unknown): Promise<void> {
+    // 快照保存 24 小时，避免实时状态键无限增长。
     await this.client.set(`task:${taskId}`, JSON.stringify(value), { EX: 86400 });
   }
 

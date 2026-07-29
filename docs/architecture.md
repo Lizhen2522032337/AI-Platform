@@ -17,7 +17,8 @@ NestJS Auth + Backend          Gin Auth + Realtime
   +--> PostgreSQL
   +--> Redis
   +--> PostgreSQL 会话历史
-  +--> RabbitMQ --> Worker --> 读取最近对话 --> FastAPI --> DeepSeek / 通义千问
+  +--> RabbitMQ --> Worker --> 读取最近对话 --> FastAPI --> Dify Knowledge
+                                                        +--> DeepSeek / 通义千问
                            |       |
                            |       +--> Qdrant
                            |       +--> MinIO
@@ -42,6 +43,7 @@ enterprise-ai-platform/
 │   ├── fastapi-service/
 │   │   └── app/
 │   │       ├── config/             AI 服务配置
+│   │       ├── dify.py             Dify Knowledge API 安全检索
 │   │       ├── integrations.py     Qdrant、MinIO 集成
 │   │       └── main.py             健康与 AI 处理接口
 │   ├── gin-service/
@@ -69,11 +71,12 @@ enterprise-ai-platform/
 4. NestJS 把持久化消息写入 RabbitMQ quorum queue。
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
 6. Worker 从 PostgreSQL 读取该会话最近若干轮已完成问答，组装 `user/assistant` 消息历史，再调用 FastAPI `/process`。
-7. FastAPI 根据 `modelProvider` 使用服务器配置调用 DeepSeek 或通义千问，并把完整历史随本轮问题一起发送。
-8. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
-9. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
-10. 大模型完成后，FastAPI 把完整结果写入 Qdrant 和 MinIO，再发送 `complete` 事件。
-11. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态；下一轮会把本轮问答加入上下文。
+7. FastAPI 使用当前问题请求 Dify Knowledge API，并按相关度、数量和总字符数过滤知识块。
+8. FastAPI 把知识块作为受控参考资料，根据 `modelProvider` 调用 DeepSeek 或通义千问，并同时发送完整对话历史。
+9. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
+10. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
+11. 大模型完成后，FastAPI 把完整结果写入 Qdrant 和 MinIO，再发送 `complete` 事件。
+12. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态；下一轮会把本轮问答加入上下文。
 
 ## 4. 数据和端口边界
 
@@ -85,6 +88,6 @@ enterprise-ai-platform/
 
 ## 5. 当前 AI 实现边界
 
-本版本通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问，支持流式回答。供应商与实际模型由服务端白名单和 `llm.env` 控制，前端只能选择供应商。Qdrant 当前仍使用演示向量；它不影响大模型回答、流式展示、PostgreSQL 答案持久化和 MinIO 结果归档。
+本版本通过 Dify Knowledge API 获取知识块，再通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问，支持流式回答。供应商、实际模型、Dify Dataset ID 与全部 Key 均由服务端 `llm.env` 控制，前端不能读取或修改。Qdrant 当前仍使用演示向量；真正的知识检索由 Dify 完成。
 
 DeepSeek 和通义千问的 Chat Completions 接口本身不替本项目保存历史。平台以 `chat_conversations` 和 `ai_tasks` 持久化会话，每次最多加载 `AI_CONTEXT_TURNS` 轮完整问答，默认 10、最大 20，以控制 Token 成本。旧的单轮任务在 `004_add_chat_conversations.sql` 中自动转换为独立历史会话。

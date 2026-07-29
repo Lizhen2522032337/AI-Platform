@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -29,6 +30,8 @@ export interface UserView {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectRepository(AppUser)
     private readonly users: Repository<AppUser>,
@@ -38,6 +41,7 @@ export class UsersService {
   ) {}
 
   normalizeUsername(username: string): string {
+    // 统一用户名比较规则，显示名仍保留用户输入的大小写。
     return username.trim().toLocaleLowerCase('en-US');
   }
 
@@ -96,6 +100,7 @@ export class UsersService {
         }),
       );
       user.role = role;
+      this.logger.log(`user created: user_id=${user.id} role=${role.code}`);
       return this.toView(user);
     } catch (error) {
       if (this.isUniqueViolation(error)) {
@@ -158,8 +163,12 @@ export class UsersService {
 
     const saved = await this.users.save(user);
     if (invalidateTokens) {
+      // 修改密码、角色或启用状态后提升版本，使所有旧 JWT 立即失效。
       await this.redisService.setAuthTokenVersion(saved.id, saved.tokenVersion);
     }
+    this.logger.log(
+      `user updated: user_id=${saved.id} actor_id=${actor.id} tokens_invalidated=${invalidateTokens}`,
+    );
     return this.toView(saved);
   }
 

@@ -27,11 +27,13 @@ export class AuthController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<LoginResponse> {
+    // trust proxy=1 后 request.ip 表示经过 Nginx 转发的真实客户端地址。
     const result = await this.authService.login(
       payload,
       request.ip ?? request.socket.remoteAddress ?? 'unknown',
     );
     response.cookie(jwtCookieName(), result.accessToken, {
+      // JavaScript 无法读取 HttpOnly Cookie，可降低 XSS 窃取 Token 的风险。
       httpOnly: true,
       secure: process.env.COOKIE_SECURE === 'true',
       sameSite: 'strict',
@@ -44,6 +46,7 @@ export class AuthController {
 
   @Get('me')
   me(@CurrentUser() user: AuthenticatedUser): Omit<AuthenticatedUser, 'tokenVersion'> {
+    // tokenVersion 是服务端撤销实现细节，不向前端公开。
     const { tokenVersion: _, ...publicUser } = user;
     return publicUser;
   }

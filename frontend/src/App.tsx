@@ -18,17 +18,21 @@ import type { AiTask, ModelProvider, TaskEvent } from './types/task'
 import './App.css'
 
 function modelLabel(provider: ModelProvider) {
+  // 后端只接受稳定的 provider code，中文名称仅用于界面显示。
   return provider === 'qwen' ? '通义千问' : 'DeepSeek'
 }
 
 function App() {
+  // 会话身份：JWT 保存在 HttpOnly Cookie，React 只持有可公开的用户资料。
   const [sessionLoading, setSessionLoading] = useState(true)
   const [user, setUser] = useState<AuthUser | null>(null)
+  // 对话状态：左侧会话列表、当前会话 ID，以及当前会话的一轮轮任务。
   const [conversations, setConversations] = useState<ChatConversation[]>([])
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null)
   const [tasks, setTasks] = useState<AiTask[]>([])
   const [prompt, setPrompt] = useState('')
   const [modelProvider, setModelProvider] = useState<ModelProvider>('deepseek')
+  // 界面状态：首次加载、提交中、错误提示、管理员视图和移动端侧栏。
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -37,14 +41,23 @@ function App() {
   const messageEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    // 页面刷新时使用 Cookie 恢复登录态，不在 localStorage 保存 access token。
     authApi.me()
-      .then(setUser)
-      .catch(() => setUser(null))
+      .then((authenticated) => {
+        console.info('[session] restored', { userId: authenticated.id, role: authenticated.role })
+        setUser(authenticated)
+      })
+      .catch(() => {
+        console.info('[session] no active login')
+        setUser(null)
+      })
       .finally(() => setSessionLoading(false))
   }, [])
 
   useEffect(() => {
+    // API 客户端遇到 401 时统一广播事件，让所有界面状态同时清空。
     const expire = () => {
+      console.warn('[session] expired or revoked')
       setUser(null)
       setConversations([])
       setTasks([])
@@ -58,6 +71,7 @@ function App() {
     if (!user) return
     try {
       const items = await conversationsApi.list()
+      console.info('[conversation] list loaded', { count: items.length })
       setConversations(items)
       setActiveConversationId((current) =>
         current && items.some((item) => item.id === current)
@@ -79,6 +93,10 @@ function App() {
     setLoading(true)
     try {
       const detail = await conversationsApi.detail(activeConversationId)
+      console.info('[conversation] detail loaded', {
+        conversationId: activeConversationId,
+        turns: detail.tasks.length,
+      })
       setTasks((current) =>
         detail.tasks.map((task) => ({
           ...task,
@@ -95,6 +113,7 @@ function App() {
   }, [activeConversationId, showAdmin])
 
   useEffect(() => {
+    // 10 秒轮询用于兜底同步；正在回答的任务由下面的 SSE 实时更新。
     if (!activeConversationId || showAdmin) {
       return
     }
@@ -114,6 +133,7 @@ function App() {
 
   useEffect(() => {
     if (!activeTaskId) return
+    console.info('[realtime] SSE connecting', { taskId: activeTaskId })
     const source = new EventSource(tasksApi.eventsUrl(activeTaskId), {
       withCredentials: true,
     })
@@ -135,20 +155,29 @@ function App() {
         ),
       )
       if (update.status === 'completed' || update.status === 'failed') {
+        console.info('[realtime] task reached terminal state', {
+          taskId: update.id,
+          status: update.status,
+        })
         source.close()
         void loadConversation()
         void loadConversations()
       }
     })
-    source.onerror = () => source.close()
+    source.onerror = () => {
+      console.warn('[realtime] SSE disconnected', { taskId: activeTaskId })
+      source.close()
+    }
     return () => source.close()
   }, [activeTaskId, loadConversation, loadConversations])
 
   useEffect(() => {
+    // 新 token 到达或消息加载后自动滚动到对话底部。
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [tasks])
 
   function beginNewChat() {
+    // 此时只清空本地界面，真正的数据库会话在用户第一次发送时创建。
     setActiveConversationId(null)
     setTasks([])
     setPrompt('')
@@ -167,6 +196,7 @@ function App() {
       let conversationId = activeConversationId
       if (!conversationId) {
         const conversation = await conversationsApi.create(modelProvider)
+        console.info('[conversation] created', { conversationId: conversation.id })
         conversationId = conversation.id
         setActiveConversationId(conversation.id)
         setConversations((current) => [conversation, ...current])
@@ -176,6 +206,11 @@ function App() {
         content,
         modelProvider,
       )
+      console.info('[task] submitted', {
+        conversationId,
+        taskId: response.task.id,
+        provider: modelProvider,
+      })
       setTasks((current) => [...current, response.task])
       setConversations((current) => [
         response.conversation,
@@ -190,6 +225,7 @@ function App() {
   }
 
   function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter 发送，Shift+Enter 保留浏览器默认换行行为。
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       void submit()
@@ -200,6 +236,7 @@ function App() {
     try {
       await authApi.logout()
     } finally {
+      console.info('[session] logged out')
       setUser(null)
       setConversations([])
       setTasks([])

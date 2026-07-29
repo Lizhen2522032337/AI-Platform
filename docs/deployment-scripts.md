@@ -142,11 +142,26 @@ QWEN_API_KEY=替换为真实百炼_API_Key
 QWEN_BASE_URL=https://替换为WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
 QWEN_MODEL=qwen-plus
 
+DIFY_ENABLED=true
+DIFY_API_KEY=替换为Dify知识库API密钥
+DIFY_BASE_URL=https://api.dify.ai/v1
+DIFY_DATASET_ID=替换为知识库页面URL中的UUID
+DIFY_TOP_K=4
+DIFY_SCORE_THRESHOLD=0.3
+DIFY_REQUEST_TIMEOUT_SECONDS=20
+DIFY_MAX_CONTEXT_CHARS=12000
+
 LLM_REQUEST_TIMEOUT_SECONDS=300
 LLM_MAX_TOKENS=2048
 ```
 
-百炼 API Key 与 `QWEN_BASE_URL` 具有地域和业务空间对应关系，请直接使用百炼控制台为该 Key 显示的 OpenAI 兼容地址。不要在聊天、Git、截图或 shell 命令中直接打印 Key。
+百炼 API Key 与 `QWEN_BASE_URL` 具有地域和业务空间对应关系，请直接使用百炼控制台为该 Key 显示的 OpenAI 兼容地址。Dify 的 `DIFY_DATASET_ID` 是知识库页面 URL 中的 UUID，不是显示名称。不要在聊天、Git、截图或 shell 命令中直接打印任何 Key。
+
+修改后限制密钥文件权限：
+
+```bash
+chmod 600 /etc/enterprise-ai-platform/llm.env
+```
 
 ### 3.5 部署行为配置
 
@@ -172,7 +187,7 @@ LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
 ls -l /etc/enterprise-ai-platform
 grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
 grep -v 'PASSWORD\|PASS=\|SECRET=' /etc/enterprise-ai-platform/platform.env
-grep -E '^(DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|QWEN_BASE_URL|QWEN_MODEL|LLM_)' /etc/enterprise-ai-platform/llm.env
+grep -E '^(DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|QWEN_BASE_URL|QWEN_MODEL|DIFY_ENABLED|DIFY_BASE_URL|DIFY_DATASET_ID|DIFY_TOP_K|DIFY_SCORE_THRESHOLD|DIFY_REQUEST_TIMEOUT_SECONDS|DIFY_MAX_CONTEXT_CHARS|LLM_)' /etc/enterprise-ai-platform/llm.env
 cat /etc/enterprise-ai-platform/deploy.env
 ```
 

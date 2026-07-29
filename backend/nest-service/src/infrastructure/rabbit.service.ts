@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import * as amqp from 'amqplib';
 
 export interface AiTaskMessage {
@@ -12,11 +12,13 @@ export interface AiTaskMessage {
 
 @Injectable()
 export class RabbitService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RabbitService.name);
   private connection?: amqp.ChannelModel;
   private channel?: amqp.ConfirmChannel;
   private readonly queue = process.env.RABBITMQ_TASK_QUEUE ?? 'ai_tasks';
 
   async onModuleInit(): Promise<void> {
+    this.logger.log(`connecting to RabbitMQ: queue=${this.queue}`);
     this.connection = await amqp.connect({
       protocol: 'amqp',
       hostname: process.env.RABBITMQ_HOST ?? 'rabbitmq',
@@ -30,11 +32,13 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
       durable: true,
       arguments: { 'x-queue-type': 'quorum' },
     });
+    this.logger.log(`RabbitMQ ready: queue=${this.queue} type=quorum`);
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.channel?.close();
     await this.connection?.close();
+    this.logger.log('RabbitMQ connection closed');
   }
 
   async publishTask(message: AiTaskMessage): Promise<void> {
@@ -47,6 +51,7 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
       { persistent: true, contentType: 'application/json' },
     );
     await this.channel.waitForConfirms();
+    this.logger.debug(`RabbitMQ publish confirmed: task_id=${message.id}`);
   }
 
   async ping(): Promise<void> {

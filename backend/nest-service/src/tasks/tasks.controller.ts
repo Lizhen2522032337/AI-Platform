@@ -17,6 +17,7 @@ import { TasksService } from './tasks.service';
 
 @Controller('tasks')
 export class TasksController {
+  // 旧任务接口保留给管理员审计；聊天界面主要使用 /conversations 接口。
   constructor(private readonly tasksService: TasksService) {}
 
   @Get()

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from typing import Literal
 
@@ -9,10 +10,16 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+from app.dify import DifyKnowledgeError, retrieve_knowledge
 from app.integrations import check_integrations, save_result
 from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
 
 
+# 统一 FastAPI 及其子模块日志级别；生产日志不包含提示词、知识正文或密钥。
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -61,17 +68,40 @@ def ndjson(event: dict[str, object]) -> bytes:
 
 
 async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
-    """调用大模型并输出增量，完成后保存答案并发送最终结果。"""
+    """先检索 Dify，再调用大模型；完成后持久化答案并发送最终事件。"""
 
     answer_parts: list[str] = []
     usage: dict[str, object] | None = None
     model = ""
+    logger.info(
+        "AI task accepted: task_id=%s provider=%s history_messages=%d prompt_chars=%d",
+        payload.task_id,
+        payload.model_provider,
+        len(payload.messages),
+        len(payload.prompt),
+    )
     try:
+        # 只使用当前问题检索知识库；历史消息仍完整交给大模型维持多轮语义。
+        knowledge = await retrieve_knowledge(payload.prompt)
+        logger.info(
+            "AI task knowledge ready: task_id=%s enabled=%s hits=%d",
+            payload.task_id,
+            knowledge.enabled,
+            knowledge.hit_count,
+        )
         history: list[ChatMessage] = [
             {"role": message.role, "content": message.content}
             for message in payload.messages
         ]
-        async for event in stream_chat(payload.model_provider, history):
+        # “没有命中”也明确告诉模型，避免用户误以为回答一定来自企业知识库。
+        knowledge_context = knowledge.context
+        if knowledge.enabled and not knowledge_context:
+            knowledge_context = "[知识库检索结果]\n本次问题未检索到相关知识块。"
+        async for event in stream_chat(
+            payload.model_provider,
+            history,
+            knowledge_context,
+        ):
             if event["type"] == "start":
                 model = str(event["model"])
             elif event["type"] == "delta":
@@ -91,10 +121,17 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             model,
             usage,
         )
+        logger.info(
+            "AI task completed: task_id=%s provider=%s model=%s answer_chars=%d",
+            payload.task_id,
+            payload.model_provider,
+            model,
+            len(answer),
+        )
         yield ndjson({"type": "complete", "result": result})
-    except LlmProviderError as error:
+    except (DifyKnowledgeError, LlmProviderError) as error:
         logger.warning(
-            "LLM request failed: task_id=%s provider=%s error=%s",
+            "AI dependency request failed: task_id=%s provider=%s error=%s",
             payload.task_id,
             payload.model_provider,
             error,
@@ -103,7 +140,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
     except Exception:
         # 仅给 Worker 返回稳定错误，不泄露堆栈、Key 或供应商响应。
         logger.exception(
-            "AI result persistence failed: task_id=%s provider=%s",
+            "AI task processing failed: task_id=%s provider=%s",
             payload.task_id,
             payload.model_provider,
         )

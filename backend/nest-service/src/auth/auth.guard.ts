@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -23,6 +24,8 @@ type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
@@ -39,9 +42,13 @@ export class AuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = this.extractToken(request);
-    if (!token) this.unauthorized();
+    if (!token) {
+      this.logger.warn(`authentication rejected: reason=missing_token path=${request.path}`);
+      this.unauthorized();
+    }
 
     try {
+      // 同时校验签名算法、签发方、受众和过期时间，禁止算法降级。
       const payload = await this.jwtService.verifyAsync<AccessTokenPayload>(token, {
         algorithms: ['HS256'],
         issuer: jwtIssuer(),
@@ -55,13 +62,17 @@ export class AuthGuard implements CanActivate {
         jwtExpiresSeconds() + 60,
       );
       request.user = user;
+      this.logger.debug(`authentication accepted: user_id=${user.id} path=${request.path}`);
       return true;
     } catch {
+      // 不记录 JWT 内容或解析异常正文，防止 Token 意外进入日志。
+      this.logger.warn(`authentication rejected: reason=invalid_token path=${request.path}`);
       this.unauthorized();
     }
   }
 
   private extractToken(request: Request): string | undefined {
+    // Bearer 供 API 调试；浏览器正常流程使用 HttpOnly Cookie。
     const [type, bearer] = request.headers.authorization?.split(' ') ?? [];
     if (type === 'Bearer' && bearer) return bearer;
 

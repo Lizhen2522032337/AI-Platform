@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -12,6 +13,7 @@ import { UsersService } from '../users/users.service';
 import { RedisService } from '../infrastructure/redis.service';
 import { errorBody } from '../common/api-error.filter';
 
+// 同一“来源地址 + 用户名”在 15 分钟内最多失败 5 次，计数保存在 Redis。
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAX_FAILURES = 5;
 const DUMMY_PASSWORD_HASH = [
@@ -47,6 +49,8 @@ export const jwtCookieName = () => process.env.JWT_COOKIE_NAME ?? 'eai_access';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -60,6 +64,7 @@ export class AuthService {
     const normalized = this.usersService.normalizeUsername(payload.username);
     const rateKey = `${clientAddress}:${normalized}`;
     if ((await this.redisService.loginFailureCount(rateKey)) >= LOGIN_MAX_FAILURES) {
+      this.logger.warn(`login blocked by rate limit: client=${clientAddress}`);
       throw new HttpException(
         errorBody('RATE_LIMITED', 'too many login attempts; try again later'),
         HttpStatus.TOO_MANY_REQUESTS,
@@ -75,6 +80,10 @@ export class AuthService {
       const failures = await this.redisService.recordLoginFailure(
         rateKey,
         LOGIN_WINDOW_SECONDS,
+      );
+      // 不记录用户名和密码，只记录来源及累计次数，兼顾排错与敏感信息保护。
+      this.logger.warn(
+        `login rejected: client=${clientAddress} failures=${failures}`,
       );
       if (failures >= LOGIN_MAX_FAILURES) {
         throw new HttpException(
@@ -110,6 +119,10 @@ export class AuthService {
       audience: jwtAudience(),
     });
 
+    this.logger.log(
+      `login succeeded: user_id=${authenticated.id} role=${authenticated.role} expires_in=${expiresIn}`,
+    );
+    // tokenVersion 只用于服务端撤销判断，不应出现在返回给浏览器的用户资料中。
     const { tokenVersion: _, ...publicUser } = authenticated;
     return {
       accessToken,

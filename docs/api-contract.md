@@ -122,6 +122,16 @@ data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"dee
 
 ### 2.1 FastAPI AI 服务
 
+FastAPI 在调用模型前，根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
+
+```text
+POST {DIFY_BASE_URL}/datasets/{DIFY_DATASET_ID}/retrieve
+Authorization: Bearer {DIFY_API_KEY}
+```
+
+请求只包含当前问题。返回知识块按 `DIFY_SCORE_THRESHOLD`、`DIFY_TOP_K` 和
+`DIFY_MAX_CONTEXT_CHARS` 过滤后注入系统提示词。Key、问题正文和知识块正文均不会写入日志。
+
 | 方法 | 内部路径 | 说明 |
 | --- | --- | --- |
 | GET | `http://fastapi-service:8000/health` | 检查 Qdrant 和 MinIO |

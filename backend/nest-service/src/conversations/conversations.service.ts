@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,6 +18,8 @@ import { ChatConversation } from './conversation.entity';
 
 @Injectable()
 export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
+
   constructor(
     @InjectRepository(ChatConversation)
     private readonly conversations: Repository<ChatConversation>,
@@ -38,12 +41,16 @@ export class ConversationsService {
     payload: CreateConversationDto,
     user: AuthenticatedUser,
   ): Promise<ChatConversation> {
+    const created = this.conversations.create({
+      title: '新对话',
+      modelProvider: payload.modelProvider,
+      createdById: user.id,
+    });
+    this.logger.log(
+      `conversation creation requested: user_id=${user.id} provider=${payload.modelProvider}`,
+    );
     return this.conversations.save(
-      this.conversations.create({
-        title: '新对话',
-        modelProvider: payload.modelProvider,
-        createdById: user.id,
-      }),
+      created,
     );
   }
 
@@ -72,6 +79,9 @@ export class ConversationsService {
       },
     });
     if (active) {
+      this.logger.warn(
+        `conversation is busy: conversation_id=${id} user_id=${user.id}`,
+      );
       throw new ConflictException(
         errorBody('CONVERSATION_BUSY', '请等待当前回答完成后再发送下一条消息'),
       );
@@ -88,6 +98,9 @@ export class ConversationsService {
       { prompt: payload.content, modelProvider: payload.modelProvider },
       user,
       id,
+    );
+    this.logger.log(
+      `conversation message accepted: conversation_id=${id} task_id=${task.id} user_id=${user.id} provider=${payload.modelProvider}`,
     );
     return { conversation: savedConversation, task };
   }

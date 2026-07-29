@@ -7,6 +7,7 @@ import { UsersService, type UserView } from './users.service';
 
 @Controller('users')
 export class UsersController {
+  // 所有路由都由 PermissionsGuard 进行服务端授权，前端隐藏按钮不属于安全边界。
   constructor(private readonly usersService: UsersService) {}
 
   @Get()

@@ -142,7 +142,7 @@ services:
     restart: unless-stopped
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
-      # 大模型 Key 只注入 FastAPI，不进入前端、NestJS、Gin 或 Worker。
+      # 大模型与 Dify Key 只注入 FastAPI，不进入前端、NestJS、Gin 或 Worker。
       - ${LLM_ENV_FILE:-/etc/enterprise-ai-platform/llm.env}
     depends_on:
       qdrant:

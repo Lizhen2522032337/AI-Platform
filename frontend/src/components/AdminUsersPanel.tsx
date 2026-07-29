@@ -14,6 +14,7 @@ const emptyForm: CreateUserPayload = {
 }
 
 export function AdminUsersPanel({ currentUserId }: AdminUsersPanelProps) {
+  // 管理员面板只保存表单和展示状态；最终授权规则仍由 NestJS 服务端执行。
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [form, setForm] = useState<CreateUserPayload>(emptyForm)
   const [error, setError] = useState('')
@@ -21,7 +22,9 @@ export function AdminUsersPanel({ currentUserId }: AdminUsersPanelProps) {
 
   const load = useCallback(async () => {
     try {
-      setUsers(await usersApi.list())
+      const items = await usersApi.list()
+      setUsers(items)
+      console.info('[admin] user list loaded', { count: items.length })
       setError('')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '用户加载失败')
@@ -38,7 +41,8 @@ export function AdminUsersPanel({ currentUserId }: AdminUsersPanelProps) {
     setSaving(true)
     setError('')
     try {
-      await usersApi.create(form)
+      const created = await usersApi.create(form)
+      console.info('[admin] user created', { userId: created.id, role: created.role })
       setForm(emptyForm)
       await load()
     } catch (requestError) {
@@ -54,7 +58,12 @@ export function AdminUsersPanel({ currentUserId }: AdminUsersPanelProps) {
   ) {
     setError('')
     try {
-      await usersApi.update(user.id, payload)
+      const updated = await usersApi.update(user.id, payload)
+      console.info('[admin] user updated', {
+        userId: updated.id,
+        role: updated.role,
+        active: updated.isActive,
+      })
       await load()
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '用户更新失败')

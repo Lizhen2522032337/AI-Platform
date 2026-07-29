@@ -5,6 +5,7 @@ import json
 from fastapi.testclient import TestClient
 
 from app import main
+from app.dify import KnowledgeResult
 
 
 client = TestClient(main.app)
@@ -24,17 +25,27 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
-    async def fake_stream(provider, messages):
+    async def fake_retrieve(query):
+        assert query == "测试任务"
+        return KnowledgeResult(
+            enabled=True,
+            context="[知识库 1]\n测试知识",
+            hit_count=1,
+        )
+
+    async def fake_stream(provider, messages, knowledge_context):
         assert provider == "qwen"
         assert messages == [
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "你好，有什么可以帮你？"},
             {"role": "user", "content": "测试任务"},
         ]
+        assert knowledge_context == "[知识库 1]\n测试知识"
         yield {"type": "start", "provider": provider, "model": "qwen-test"}
         yield {"type": "delta", "text": "处理"}
         yield {"type": "delta", "text": "完成"}
 
+    monkeypatch.setattr(main, "retrieve_knowledge", fake_retrieve)
     monkeypatch.setattr(main, "stream_chat", fake_stream)
     monkeypatch.setattr(
         main,
