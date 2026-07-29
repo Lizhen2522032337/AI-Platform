@@ -3,11 +3,17 @@
 deploy/.env
 deploy/.state/
 
-# 所有真实环境文件与私钥均不得提交；示例配置可以进入仓库。
-.env
-.env.*
-!.env.example
-!.env.*.example
+# 所有真实环境文件与私钥均不得提交；不仅保护“.env”，也保护“llm.env”等命名。
+*.env
+*.env.*
+# 只有以 example 结尾且内容为占位符的模板允许进入仓库。
+!*.env.example
+!*.env.*.example
+# 关键文件再显式列出一遍，避免以后调整通配规则时误提交。
+deploy/llm.env
+deploy/database.env
+deploy/platform.env
+deploy/deploy.env
 *.pem
 *.npm-cache
 *.key
