@@ -90,3 +90,23 @@ def test_process_rejects_blank_prompt() -> None:
         },
     )
     assert response.status_code == 422
+
+
+def test_delete_task_artifacts(monkeypatch) -> None:
+    captured = []
+    monkeypatch.setattr(main, "delete_results", lambda tasks: captured.extend(tasks))
+
+    response = client.request(
+        "DELETE",
+        "/artifacts/tasks",
+        json={
+            "tasks": [
+                {"taskId": 7, "objectKey": "tasks/7/result.json"},
+                {"taskId": 8, "objectKey": None},
+            ]
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert captured == [(7, "tasks/7/result.json"), (8, None)]

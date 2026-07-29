@@ -2,6 +2,8 @@ import type { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { AiTask } from '../tasks/task.entity';
 import type { TasksService } from '../tasks/tasks.service';
+import type { AiArtifactsService } from '../infrastructure/ai-artifacts.service';
+import type { RedisService } from '../infrastructure/redis.service';
 import { ChatConversation } from './conversation.entity';
 import { ConversationsService } from './conversations.service';
 
@@ -31,6 +33,7 @@ describe('ConversationsService', () => {
     create: jest.fn(),
     save: jest.fn(),
     findOneBy: jest.fn(),
+    remove: jest.fn(),
   } as unknown as jest.Mocked<Repository<ChatConversation>>;
   const tasks = {
     find: jest.fn(),
@@ -39,11 +42,23 @@ describe('ConversationsService', () => {
   const tasksService = {
     create: jest.fn(),
   } as unknown as jest.Mocked<TasksService>;
+  const artifactsService = {
+    deleteTaskArtifacts: jest.fn(),
+  } as unknown as jest.Mocked<AiArtifactsService>;
+  const redisService = {
+    deleteTaskStates: jest.fn(),
+  } as unknown as jest.Mocked<RedisService>;
   let service: ConversationsService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ConversationsService(conversations, tasks, tasksService);
+    service = new ConversationsService(
+      conversations,
+      tasks,
+      tasksService,
+      artifactsService,
+      redisService,
+    );
   });
 
   it('lists only the current user conversations', async () => {
@@ -81,5 +96,36 @@ describe('ConversationsService', () => {
       user,
       3,
     );
+  });
+
+  it('deletes owned conversation tasks and external artifacts', async () => {
+    const current = conversation();
+    const completed = {
+      id: 11,
+      status: 'completed',
+      objectKey: 'tasks/11/result.json',
+    } as AiTask;
+    conversations.findOneBy.mockResolvedValue(current);
+    conversations.remove.mockResolvedValue(current);
+    tasks.find.mockResolvedValue([completed]);
+
+    await expect(service.remove(3, user)).resolves.toBeUndefined();
+
+    expect(artifactsService.deleteTaskArtifacts).toHaveBeenCalledWith([
+      { taskId: 11, objectKey: 'tasks/11/result.json' },
+    ]);
+    expect(redisService.deleteTaskStates).toHaveBeenCalledWith([11]);
+    expect(conversations.remove).toHaveBeenCalledWith(current);
+  });
+
+  it('does not delete a conversation while a task is active', async () => {
+    conversations.findOneBy.mockResolvedValue(conversation());
+    tasks.find.mockResolvedValue([
+      { id: 12, status: 'processing', objectKey: null } as AiTask,
+    ]);
+
+    await expect(service.remove(3, user)).rejects.toMatchObject({ status: 409 });
+    expect(artifactsService.deleteTaskArtifacts).not.toHaveBeenCalled();
+    expect(conversations.remove).not.toHaveBeenCalled();
   });
 });

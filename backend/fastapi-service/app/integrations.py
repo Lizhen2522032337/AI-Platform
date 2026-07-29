@@ -129,3 +129,34 @@ def save_result(
         len(payload),
     )
     return result
+
+
+def delete_results(tasks: list[tuple[int, str | None]]) -> None:
+    """幂等删除会话任务在 Qdrant 和 MinIO 中的派生结果。"""
+
+    if not tasks:
+        return
+    settings = get_settings()
+    task_ids = [task_id for task_id, _ in tasks]
+    qdrant = qdrant_client()
+    if qdrant.collection_exists(settings.qdrant_collection):
+        qdrant.delete(
+            collection_name=settings.qdrant_collection,
+            points_selector=models.PointIdsList(points=task_ids),
+            wait=True,
+        )
+        logger.info("Qdrant results deleted: tasks=%d", len(task_ids))
+
+    storage = minio_client()
+    if storage.bucket_exists(settings.minio_bucket):
+        deleted_objects = 0
+        for _, object_key in tasks:
+            if not object_key:
+                continue
+            storage.remove_object(settings.minio_bucket, object_key)
+            deleted_objects += 1
+        logger.info(
+            "MinIO results deleted: bucket=%s objects=%d",
+            settings.minio_bucket,
+            deleted_objects,
+        )

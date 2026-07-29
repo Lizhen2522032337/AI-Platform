@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent,
 } from 'react'
 import { authApi } from './api/auth'
 import { conversationsApi } from './api/conversations'
@@ -35,6 +36,7 @@ function App() {
   // 界面状态：首次加载、提交中、错误提示、管理员视图和移动端侧栏。
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [deletingConversationId, setDeletingConversationId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [showAdmin, setShowAdmin] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -224,6 +226,33 @@ function App() {
     }
   }
 
+  async function deleteConversation(
+    event: MouseEvent<HTMLButtonElement>,
+    conversation: ChatConversation,
+  ) {
+    event.stopPropagation()
+    if (!window.confirm(`确定删除对话“${conversation.title}”吗？\n删除后无法恢复。`)) return
+
+    setDeletingConversationId(conversation.id)
+    setError('')
+    try {
+      await conversationsApi.remove(conversation.id)
+      console.info('[conversation] deleted', { conversationId: conversation.id })
+      setConversations((current) =>
+        current.filter((item) => item.id !== conversation.id),
+      )
+      if (activeConversationId === conversation.id) {
+        setActiveConversationId(null)
+        setTasks([])
+        setPrompt('')
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '会话删除失败')
+    } finally {
+      setDeletingConversationId(null)
+    }
+  }
+
   function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter 发送，Shift+Enter 保留浏览器默认换行行为。
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -275,23 +304,42 @@ function App() {
         <nav className="conversation-list" aria-label="会话列表">
           {conversations.length === 0 ? (
             <p className="sidebar-empty">还没有对话</p>
-          ) : conversations.map((conversation) => (
-            <button
-              className={`conversation-link ${!showAdmin && conversation.id === activeConversationId ? 'active' : ''}`}
-              key={conversation.id}
-              onClick={() => {
-                setShowAdmin(false)
-                setActiveConversationId(conversation.id)
-                setTasks([])
-                setSidebarOpen(false)
-              }}
-              title={conversation.title}
-              type="button"
-            >
-              <span className="conversation-icon">◇</span>
-              <span>{conversation.title}</span>
-            </button>
-          ))}
+          ) : conversations.map((conversation) => {
+            const selected = !showAdmin && conversation.id === activeConversationId
+            const deleting = deletingConversationId === conversation.id
+            const hasActiveTask = selected && Boolean(activeTask)
+            return (
+              <div
+                className={`conversation-row ${selected ? 'active' : ''}`}
+                key={conversation.id}
+              >
+                <button
+                  className="conversation-link"
+                  onClick={() => {
+                    setShowAdmin(false)
+                    setActiveConversationId(conversation.id)
+                    setTasks([])
+                    setSidebarOpen(false)
+                  }}
+                  title={conversation.title}
+                  type="button"
+                >
+                  <span className="conversation-icon">◇</span>
+                  <span>{conversation.title}</span>
+                </button>
+                <button
+                  aria-label={`删除对话：${conversation.title}`}
+                  className="conversation-delete"
+                  disabled={deleting || hasActiveTask}
+                  onClick={(event) => void deleteConversation(event, conversation)}
+                  title={hasActiveTask ? '请等待当前回答完成' : '删除对话'}
+                  type="button"
+                >
+                  {deleting ? '…' : '×'}
+                </button>
+              </div>
+            )
+          })}
         </nav>
 
         <div className="sidebar-footer">

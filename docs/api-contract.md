@@ -22,6 +22,7 @@
 | POST | `/api/conversations` | 201 | 创建空会话 |
 | GET | `/api/conversations/:id` | 200 | 查询会话及按时间排列的问答轮次 |
 | POST | `/api/conversations/:id/messages` | 202 | 在会话内发送消息并创建异步回答任务 |
+| DELETE | `/api/conversations/:id` | 204 | 删除本人单个会话、问答轮次及关联存储产物 |
 
 登录请求：
 
@@ -101,6 +102,8 @@
 
 一个会话同一时间只允许一条消息处于 `queued/processing`；否则返回 409，避免第二轮在第一轮回答完成前丢失上下文。会话列表始终只返回当前登录人的数据，管理员用户管理功能不会自动展示其他人的私人会话。
 
+删除会话同样只允许操作当前登录人自己的数据。若仍有 `queued/processing` 任务则返回 409；删除成功会清理 MinIO 结果、Qdrant 向量、Redis 实时状态，并由 PostgreSQL 外键级联删除全部问答轮次。该操作不可恢复。
+
 ### 1.2 Gin 实时接口
 
 | 方法 | 对外路径 | 说明 |
@@ -136,6 +139,7 @@ Authorization: Bearer {DIFY_API_KEY}
 | --- | --- | --- |
 | GET | `http://fastapi-service:8000/health` | 检查 Qdrant 和 MinIO |
 | POST | `http://fastapi-service:8000/process` | 调用选定大模型并返回 NDJSON 增量流 |
+| DELETE | `http://fastapi-service:8000/artifacts/tasks` | 供 NestJS 内部清理 Qdrant 与 MinIO 任务产物 |
 
 请求：
 

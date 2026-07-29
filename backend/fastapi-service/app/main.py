@@ -6,12 +6,12 @@ import os
 from collections.abc import AsyncIterator
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from app.dify import DifyKnowledgeError, retrieve_knowledge
-from app.integrations import check_integrations, save_result
+from app.integrations import check_integrations, delete_results, save_result
 from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
 
 
@@ -37,6 +37,24 @@ class ProcessRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     model_provider: ModelProvider = Field(alias="modelProvider")
     messages: list[ConversationMessage] = Field(min_length=1, max_length=41)
+
+
+class ArtifactTask(BaseModel):
+    """NestJS 从数据库读取的单个任务产物定位信息。"""
+
+    task_id: int = Field(alias="taskId", gt=0)
+    object_key: str | None = Field(
+        default=None,
+        alias="objectKey",
+        max_length=500,
+        pattern=r"^tasks/[1-9][0-9]*/result\.json$",
+    )
+
+
+class DeleteArtifactsRequest(BaseModel):
+    """一次会话删除请求中需要清理的全部任务。"""
+
+    tasks: list[ArtifactTask] = Field(max_length=100)
 
 
 app = FastAPI(title="Enterprise AI Service", version="1.0.0")
@@ -152,3 +170,14 @@ def process(payload: ProcessRequest) -> StreamingResponse:
     """供 Worker 内部调用的 NDJSON 流式 AI 接口。"""
 
     return StreamingResponse(process_events(payload), media_type="application/x-ndjson")
+
+
+@app.delete("/artifacts/tasks", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task_artifacts(payload: DeleteArtifactsRequest) -> Response:
+    """供 NestJS 内部调用，删除会话任务的向量和结果文件。"""
+
+    delete_results(
+        [(task.task_id, task.object_key) for task in payload.tasks],
+    )
+    logger.info("AI task artifacts deleted: tasks=%d", len(payload.tasks))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -38,6 +38,12 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.set(`task:${taskId}`, JSON.stringify(value), { EX: 86400 });
   }
 
+  async deleteTaskStates(taskIds: number[]): Promise<void> {
+    if (taskIds.length === 0) return;
+    await this.client.del(taskIds.map((taskId) => `task:${taskId}`));
+    this.logger.log(`Redis task states deleted: tasks=${taskIds.length}`);
+  }
+
   async recordLoginFailure(key: string, ttlSeconds: number): Promise<number> {
     const redisKey = `auth:login-failures:${key}`;
     const count = await this.client.incr(redisKey);

@@ -14,6 +14,8 @@ export const conversationsApi = {
       body: JSON.stringify({ modelProvider }),
     }),
   detail: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
+  remove: (id: number) =>
+    request<void>(`/conversations/${id}`, { method: 'DELETE' }),
   sendMessage: (id: number, content: string, modelProvider: ModelProvider) =>
     request<SendMessageResponse>(`/conversations/${id}/messages`, {
       method: 'POST',

@@ -8,6 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { errorBody } from '../common/api-error.filter';
+import { AiArtifactsService } from '../infrastructure/ai-artifacts.service';
+import { RedisService } from '../infrastructure/redis.service';
 import { AiTask } from '../tasks/task.entity';
 import { TasksService } from '../tasks/tasks.service';
 import type {
@@ -26,6 +28,8 @@ export class ConversationsService {
     @InjectRepository(AiTask)
     private readonly tasks: Repository<AiTask>,
     private readonly tasksService: TasksService,
+    private readonly artifactsService: AiArtifactsService,
+    private readonly redisService: RedisService,
   ) {}
 
   findAll(user: AuthenticatedUser): Promise<ChatConversation[]> {
@@ -103,6 +107,41 @@ export class ConversationsService {
       `conversation message accepted: conversation_id=${id} task_id=${task.id} user_id=${user.id} provider=${payload.modelProvider}`,
     );
     return { conversation: savedConversation, task };
+  }
+
+  async remove(id: number, user: AuthenticatedUser): Promise<void> {
+    const conversation = await this.requireOwned(id, user.id);
+    const conversationTasks = await this.tasks.find({
+      where: { conversationId: id, createdById: user.id },
+      order: { id: 'ASC' },
+    });
+    const active = conversationTasks.some(
+      (task) => task.status === 'queued' || task.status === 'processing',
+    );
+    if (active) {
+      this.logger.warn(
+        `conversation deletion blocked: conversation_id=${id} user_id=${user.id} reason=active_task`,
+      );
+      throw new ConflictException(
+        errorBody('CONVERSATION_BUSY', '请等待当前回答完成后再删除会话'),
+      );
+    }
+
+    // 先清理外部产物；全部成功后再删除数据库主记录，避免静默遗留回答副本。
+    await this.artifactsService.deleteTaskArtifacts(
+      conversationTasks.map((task) => ({
+        taskId: task.id,
+        objectKey: task.objectKey,
+      })),
+    );
+    await this.redisService.deleteTaskStates(
+      conversationTasks.map((task) => task.id),
+    );
+    // 004 迁移中的 ON DELETE CASCADE 会同步删除该会话全部 ai_tasks。
+    await this.conversations.remove(conversation);
+    this.logger.log(
+      `conversation deleted: conversation_id=${id} user_id=${user.id} tasks=${conversationTasks.length}`,
+    );
   }
 
   private async requireOwned(

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -56,5 +57,15 @@ export class ConversationsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ conversation: ChatConversation; task: AiTask }> {
     return this.conversations.sendMessage(id, payload, user);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequireAnyPermission('tasks:create')
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<void> {
+    return this.conversations.remove(id, user);
   }
 }
