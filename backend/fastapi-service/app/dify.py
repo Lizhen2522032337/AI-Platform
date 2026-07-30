@@ -74,8 +74,13 @@ def _format_records(records: object, settings: Settings) -> tuple[str, int]:
         if not isinstance(segment, dict):
             continue
         content = str(segment.get("content") or "").strip()
-        if not content:
-            continue
+        question = str(segment.get("question") or "").strip()
+        answer = str(segment.get("answer") or "").strip()
+
+        if answer:
+            content = f"问题：{question}\n答案：{answer}"
+        else:
+            content = question
         document = segment.get("document")
         source = (
             str(document.get("name") or "未知文档")
