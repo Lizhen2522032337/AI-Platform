@@ -6,6 +6,7 @@ import pytest
 
 from app.agent import graph
 from app.agent.catalog import CatalogQuery, QueryCatalog
+from app.agent.database_tool import _prepare_sql
 from app.agent.db2_tool import Db2ToolError, _assert_read_only_sql
 from app.agent.report_tools import create_report_files
 from app.agent.types import AgentPlan
@@ -73,8 +74,11 @@ def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
 
 
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
-    async def fake_create_plan(intent, prompt, provider, messages, catalog):
+    async def fake_create_plan(
+        intent, prompt, provider, messages, catalog, database_type
+    ):
         assert intent == "report_generation"
+        assert database_type == "postgresql"
         return AgentPlan(
             intent=intent,
             objective=prompt,
@@ -112,3 +116,41 @@ def test_catalog_query_model_allows_parameterized_select() -> None:
         sql="SELECT ID FROM PROD.RECORD WHERE CREATED_AT >= ?",
     )
     assert query.id == "production_window"
+    assert query.supports("db2") is True
+    assert query.supports("postgresql") is False
+
+
+def test_catalog_selects_sql_for_requested_database_dialect() -> None:
+    query = CatalogQuery(
+        id="production_window",
+        description="查询时间窗内生产记录",
+        sql={
+            "postgresql": "SELECT id FROM record WHERE created_at >= :start_time LIMIT 10",
+            "db2": "SELECT id FROM record WHERE created_at >= :start_time FETCH FIRST 10 ROWS ONLY",
+        },
+        parameters=[
+            {
+                "name": "start_time",
+                "description": "开始时间",
+                "type": "string",
+            }
+        ],
+    )
+    assert "LIMIT 10" in (query.sql_for("postgresql") or "")
+    assert "FETCH FIRST 10" in (query.sql_for("db2") or "")
+
+    postgresql_sql, postgresql_values = _prepare_sql(
+        query.sql_for("postgresql") or "",
+        "postgresql",
+        query.parameters,
+        {"start_time": "2026-07-31T00:00:00+08:00"},
+    )
+    db2_sql, db2_values = _prepare_sql(
+        query.sql_for("db2") or "",
+        "db2",
+        query.parameters,
+        {"start_time": "2026-07-31T00:00:00+08:00"},
+    )
+    assert "%s" in postgresql_sql
+    assert "?" in db2_sql
+    assert postgresql_values == db2_values

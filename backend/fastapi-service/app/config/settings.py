@@ -48,13 +48,25 @@ class Settings(BaseSettings):
     agent_max_queries: int = 6
     agent_max_evidence_chars: int = 24000
 
-    # DB2 连接串和查询目录只存在于虚拟机；默认关闭，保证尚未提供生产配置时
-    # FastAPI 仍可使用 Dify 和大模型完成普通问答。
+    # Agent 数据库连接统一由虚拟机 Git 外配置注入。PostgreSQL 默认使用 Compose
+    # 服务名 postgres；DB2 默认关闭，未提供配置时仍可使用 Dify 完成普通问答。
+    postgres_enabled: bool = True
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "enterprise_ai_platform"
+    postgres_user: str = "enterprise_ai"
+    postgres_password: SecretStr | None = None
+    postgres_sslmode: str = "disable"
+    postgres_query_timeout_seconds: int = 30
+    postgres_max_rows: int = 500
+
     db2_enabled: bool = False
     db2_dsn: SecretStr | None = None
     db2_catalog_file: str = "/etc/enterprise-ai-platform/db2-catalog.json"
     db2_query_timeout_seconds: int = 30
     db2_max_rows: int = 500
+    # 新配置优先使用通用目录；为空时兼容原有 DB2_CATALOG_FILE。
+    database_catalog_file: str | None = None
 
     # 报告文件默认写入现有 MinIO。通知使用通用 Webhook，且默认不自动发送，
     # 后续确定企业微信、钉钉或其他渠道后可替换适配器。

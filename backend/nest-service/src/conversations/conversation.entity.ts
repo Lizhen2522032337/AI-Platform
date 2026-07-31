@@ -5,7 +5,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import type { ModelProvider } from '../tasks/create-task.dto';
+import type { DatabaseType, ModelProvider } from '../tasks/create-task.dto';
 
 @Entity({ name: 'chat_conversations' })
 export class ChatConversation {
@@ -15,8 +15,21 @@ export class ChatConversation {
   @Column({ type: 'varchar', length: 120, default: '新对话' })
   title: string;
 
-  @Column({ name: 'model_provider', type: 'varchar', length: 20, default: 'deepseek' })
+  @Column({
+    name: 'model_provider',
+    type: 'varchar',
+    length: 20,
+    default: 'deepseek',
+  })
   modelProvider: ModelProvider;
+
+  @Column({
+    name: 'database_type',
+    type: 'varchar',
+    length: 20,
+    default: 'postgresql',
+  })
+  databaseType: DatabaseType;
 
   @Column({ name: 'created_by', type: 'integer' })
   createdById: number;

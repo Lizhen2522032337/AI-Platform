@@ -1,4 +1,4 @@
-"""Agent 状态、Planner 输出以及 DB2 查询目录的数据结构。"""
+"""Agent 状态、Planner 输出以及通用数据库查询目录的数据结构。"""
 
 from typing import Any, Literal, TypedDict
 
@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 Scalar = str | int | float | bool | None
 AgentIntent = Literal["incident_analysis", "report_generation"]
+DatabaseType = Literal["postgresql", "db2"]
 
 
 class PlannedQuery(BaseModel):
@@ -35,6 +36,7 @@ class AgentState(TypedDict, total=False):
     task_id: int
     prompt: str
     provider: str
+    database_type: DatabaseType
     messages: list[dict[str, str]]
     intent: AgentIntent
     plan: dict[str, Any]
@@ -42,4 +44,3 @@ class AgentState(TypedDict, total=False):
     knowledge_hits: int
     observations: list[dict[str, Any]]
     agent_context: str
-

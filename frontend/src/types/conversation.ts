@@ -1,9 +1,10 @@
-import type { AiTask, ModelProvider } from './task'
+import type { AiTask, DatabaseType, ModelProvider } from './task'
 
 export interface ChatConversation {
   id: number
   title: string
   modelProvider: ModelProvider
+  databaseType: DatabaseType
   createdById: number
   createdAt: string
   updatedAt: string

@@ -26,8 +26,9 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
-    async def fake_prepare(task_id, prompt, provider, messages):
+    async def fake_prepare(task_id, prompt, provider, messages, database_type):
         assert (task_id, prompt, provider) == (7, "测试任务", "qwen")
+        assert database_type == "postgresql"
         assert messages[-1] == {"role": "user", "content": "测试任务"}
         return AgentPreparation(
             intent="incident_analysis",

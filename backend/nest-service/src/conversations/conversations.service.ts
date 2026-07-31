@@ -12,10 +12,7 @@ import { AiArtifactsService } from '../infrastructure/ai-artifacts.service';
 import { RedisService } from '../infrastructure/redis.service';
 import { AiTask } from '../tasks/task.entity';
 import { TasksService } from '../tasks/tasks.service';
-import type {
-  CreateConversationDto,
-  SendMessageDto,
-} from './conversation.dto';
+import type { CreateConversationDto, SendMessageDto } from './conversation.dto';
 import { ChatConversation } from './conversation.entity';
 
 @Injectable()
@@ -48,14 +45,13 @@ export class ConversationsService {
     const created = this.conversations.create({
       title: '新对话',
       modelProvider: payload.modelProvider,
+      databaseType: payload.databaseType,
       createdById: user.id,
     });
     this.logger.log(
       `conversation creation requested: user_id=${user.id} provider=${payload.modelProvider}`,
     );
-    return this.conversations.save(
-      created,
-    );
+    return this.conversations.save(created);
   }
 
   async detail(
@@ -92,6 +88,7 @@ export class ConversationsService {
     }
 
     conversation.modelProvider = payload.modelProvider;
+    conversation.databaseType = payload.databaseType;
     if (conversation.title === '新对话') {
       conversation.title = this.titleFrom(payload.content);
     }
@@ -99,12 +96,16 @@ export class ConversationsService {
     conversation.updatedAt = new Date();
     const savedConversation = await this.conversations.save(conversation);
     const task = await this.tasksService.create(
-      { prompt: payload.content, modelProvider: payload.modelProvider },
+      {
+        prompt: payload.content,
+        modelProvider: payload.modelProvider,
+        databaseType: payload.databaseType,
+      },
       user,
       id,
     );
     this.logger.log(
-      `conversation message accepted: conversation_id=${id} task_id=${task.id} user_id=${user.id} provider=${payload.modelProvider}`,
+      `conversation message accepted: conversation_id=${id} task_id=${task.id} user_id=${user.id} provider=${payload.modelProvider} database=${payload.databaseType}`,
     );
     return { conversation: savedConversation, task };
   }

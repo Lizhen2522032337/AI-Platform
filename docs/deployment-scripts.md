@@ -13,7 +13,7 @@
 | Redis/RabbitMQ/MinIO 等配置 | `/etc/enterprise-ai-platform/platform.env` |
 | DeepSeek/千问 API 配置 | `/etc/enterprise-ai-platform/llm.env` |
 | Agent/DB2/通知配置 | `/etc/enterprise-ai-platform/agent.env` |
-| DB2业务与批准查询目录 | `/etc/enterprise-ai-platform/db2-catalog.json` |
+| PostgreSQL/DB2业务与批准查询目录 | `/etc/enterprise-ai-platform/database-catalog.json` |
 | 部署分支和数据库模式 | `/etc/enterprise-ai-platform/deploy.env` |
 
 启动顺序：
@@ -178,8 +178,11 @@ vi /etc/enterprise-ai-platform/agent.env
 AGENT_ENABLED=true
 AGENT_MAX_QUERIES=6
 AGENT_MAX_EVIDENCE_CHARS=24000
+POSTGRES_ENABLED=true
+POSTGRES_QUERY_TIMEOUT_SECONDS=30
+POSTGRES_MAX_ROWS=500
+DATABASE_CATALOG_FILE=/etc/enterprise-ai-platform/database-catalog.json
 DB2_ENABLED=false
-DB2_CATALOG_FILE=/etc/enterprise-ai-platform/db2-catalog.json
 DB2_QUERY_TIMEOUT_SECONDS=30
 DB2_MAX_ROWS=500
 REPORT_FILES_ENABLED=true
@@ -191,7 +194,7 @@ NOTIFICATION_AUTO_SEND=false
 chmod 600 /etc/enterprise-ai-platform/agent.env
 ```
 
-DB2 DSN、查询目录和通知配置的要求见 `docs/agent-architecture.md`。启用 DB2 前必须使用只读账号，并把审核后的目录保存为 `/etc/enterprise-ai-platform/db2-catalog.json`。
+PostgreSQL 连接直接复用 `database.env`。查询目录和 DB2 DSN、通知配置的要求见 `docs/agent-architecture.md`；审核后的目录保存为 `/etc/enterprise-ai-platform/database-catalog.json`。
 
 ### 3.6 部署行为配置
 
@@ -219,7 +222,7 @@ ls -l /etc/enterprise-ai-platform
 grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
 grep -v 'PASSWORD\|PASS=\|SECRET=' /etc/enterprise-ai-platform/platform.env
 grep -E '^(DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|QWEN_BASE_URL|QWEN_MODEL|DIFY_ENABLED|DIFY_BASE_URL|DIFY_DATASET_ID|DIFY_TOP_K|DIFY_SCORE_THRESHOLD|DIFY_REQUEST_TIMEOUT_SECONDS|DIFY_MAX_CONTEXT_CHARS|LLM_)' /etc/enterprise-ai-platform/llm.env
-grep -E '^(AGENT_|DB2_ENABLED|DB2_CATALOG_FILE|DB2_QUERY_TIMEOUT_SECONDS|DB2_MAX_ROWS|REPORT_FILES_ENABLED|NOTIFICATION_ENABLED|NOTIFICATION_AUTO_SEND)' /etc/enterprise-ai-platform/agent.env
+grep -E '^(AGENT_|POSTGRES_ENABLED|POSTGRES_QUERY_TIMEOUT_SECONDS|POSTGRES_MAX_ROWS|DATABASE_CATALOG_FILE|DB2_ENABLED|DB2_QUERY_TIMEOUT_SECONDS|DB2_MAX_ROWS|REPORT_FILES_ENABLED|NOTIFICATION_ENABLED|NOTIFICATION_AUTO_SEND)' /etc/enterprise-ai-platform/agent.env
 cat /etc/enterprise-ai-platform/deploy.env
 ```
 
@@ -237,6 +240,20 @@ git status --short --branch
 git log -1 --oneline
 ```
 
+首次启用 PostgreSQL 查询 Tool 时，复制通用目录模板。此命令只在目标文件不存在时执行，
+不会覆盖以后由 DBA 审核过的目录：
+
+```bash
+if [ ! -f /etc/enterprise-ai-platform/database-catalog.json ]; then
+  install -m 600 deploy/database-catalog.example.json \
+    /etc/enterprise-ai-platform/database-catalog.json
+fi
+vi /etc/enterprise-ai-platform/database-catalog.json
+```
+
+模板里的 `task_status_summary` 可以查询本项目 `ai_tasks`。接入真实生产表时，
+再按 `docs/agent-architecture.md` 的格式添加同一查询 ID 的 PostgreSQL/DB2 方言 SQL。
+
 私有仓库应使用 GitHub Deploy Key 或其他安全凭据，不要把令牌写进部署脚本。
 
 ### 第 2 步：声明配置路径并检查 Compose
@@ -246,6 +263,7 @@ cd /opt/enterprise-ai-platform
 export DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
 export PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
 export LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
+export AGENT_ENV_FILE=/etc/enterprise-ai-platform/agent.env
 docker compose -f deploy/docker-compose.yml --profile managed-db config --quiet
 ```
 
@@ -362,6 +380,7 @@ Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/auth/login `
 $body = @{
   prompt = "测试企业 AI 异步任务"
   modelProvider = "deepseek"
+  databaseType = "postgresql"
 } | ConvertTo-Json
 $task = Invoke-RestMethod -Method Post -Uri http://192.168.86.133/api/tasks `
   -WebSession $session -ContentType "application/json" -Body $body
@@ -374,7 +393,7 @@ Invoke-RestMethod "http://192.168.86.133/api/tasks/$($task.id)" -WebSession $ses
 
 ## 5. 以后首次部署：一键脚本
 
-先完成第 3 节的四个配置文件。然后在 Windows PowerShell 复制脚本：
+先完成第 3 节的五个配置文件。然后在 Windows PowerShell 复制脚本：
 
 ```powershell
 scp "D:\LiZhen\StudyMaterials\AI-Platform\enterprise-ai-platform\deploy\scripts\bootstrap-deploy.sh" <虚拟机用户名>@192.168.86.133:/tmp/bootstrap-deploy.sh

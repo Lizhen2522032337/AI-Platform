@@ -58,7 +58,7 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "stream_ai_service",
-        lambda task_id, _prompt, provider, messages: iter(
+        lambda task_id, _prompt, provider, database_type, messages: iter(
             [
                 {"type": "start", "provider": provider, "model": "test-model"},
                 {"type": "delta", "text": "完"},
@@ -85,6 +85,7 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
                 "ownerId": 3,
                 "prompt": "测试",
                 "modelProvider": "qwen",
+                "databaseType": "postgresql",
                 "conversationId": 5,
             }
         ).encode()
@@ -94,6 +95,7 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
     assert redis_updates[0]["status"] == "processing"
     assert redis_updates[0]["ownerId"] == 3
     assert redis_updates[0]["modelProvider"] == "qwen"
+    assert redis_updates[0]["databaseType"] == "postgresql"
     assert redis_updates[0]["conversationId"] == 5
     assert any(state.get("partialText") for state in redis_updates)
     assert redis_updates[-1]["status"] == "completed"

@@ -25,6 +25,7 @@ function sampleTask(): AiTask {
     objectKey: null,
     vectorId: null,
     modelProvider: 'deepseek',
+    databaseType: 'postgresql',
     modelName: null,
     answer: null,
     createdById: 7,
@@ -61,13 +62,21 @@ describe('TasksService', () => {
     repository.save.mockResolvedValue(task);
 
     await expect(
-      service.create({ prompt: task.prompt, modelProvider: 'deepseek' }, user),
+      service.create(
+        {
+          prompt: task.prompt,
+          modelProvider: 'deepseek',
+          databaseType: 'postgresql',
+        },
+        user,
+      ),
     ).resolves.toEqual(task);
     expect(rabbitService.publishTask).toHaveBeenCalledWith({
       id: 1,
       ownerId: 7,
       prompt: task.prompt,
       modelProvider: 'deepseek',
+      databaseType: 'postgresql',
       conversationId: null,
       createdAt: '2026-07-26T00:00:00.000Z',
     });
@@ -76,6 +85,7 @@ describe('TasksService', () => {
       ownerId: 7,
       status: 'queued',
       modelProvider: 'deepseek',
+      databaseType: 'postgresql',
       conversationId: null,
     });
   });
@@ -92,6 +102,8 @@ describe('TasksService', () => {
 
   it('throws 404 when a task does not exist', async () => {
     repository.findOneBy.mockResolvedValue(null);
-    await expect(service.findOne(999, user)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.findOne(999, user)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });

@@ -1,11 +1,13 @@
 export type TaskStatus = 'queued' | 'processing' | 'completed' | 'failed'
 export type ModelProvider = 'deepseek' | 'qwen'
+export type DatabaseType = 'postgresql' | 'db2'
 
 export interface AiTask {
   id: number
   prompt: string
   status: TaskStatus
   modelProvider: ModelProvider
+  databaseType: DatabaseType
   modelName: string | null
   answer: string | null
   partialText?: string

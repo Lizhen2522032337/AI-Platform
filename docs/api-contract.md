@@ -57,11 +57,12 @@
 ```json
 {
   "prompt": "总结设备巡检记录并提取风险点",
-  "modelProvider": "deepseek"
+  "modelProvider": "deepseek",
+  "databaseType": "postgresql"
 }
 ```
 
-`modelProvider` 只能是 `deepseek` 或 `qwen`。客户端不能提交 API Key、接口地址或任意模型名；这些值由 FastAPI 的仓库外配置映射。
+`modelProvider` 只能是 `deepseek` 或 `qwen`；`databaseType` 只能是 `postgresql` 或 `db2`。客户端不能提交 API Key、连接密码、接口地址或任意模型名；这些值由 FastAPI 的仓库外配置映射。
 
 任务响应：
 
@@ -71,6 +72,7 @@
   "prompt": "总结设备巡检记录并提取风险点",
   "status": "queued",
   "modelProvider": "deepseek",
+  "databaseType": "postgresql",
   "modelName": null,
   "answer": null,
   "result": null,
@@ -88,7 +90,7 @@
 创建会话：
 
 ```json
-{ "modelProvider": "deepseek" }
+{ "modelProvider": "deepseek", "databaseType": "postgresql" }
 ```
 
 发送下一轮消息：
@@ -96,7 +98,8 @@
 ```json
 {
   "content": "继续解释刚才提到的第二点",
-  "modelProvider": "deepseek"
+  "modelProvider": "deepseek",
+  "databaseType": "postgresql"
 }
 ```
 
@@ -125,7 +128,7 @@ data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"dee
 
 ### 2.1 FastAPI AI 服务
 
-FastAPI 在调用模型前运行 LangGraph Agent。Supervisor 选择故障分析或报表 Planner，Planner 将多轮指代改写为独立检索问题，并根据外部批准目录选择 DB2 查询。Agent 根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
+FastAPI 在调用模型前运行 LangGraph Agent。Supervisor 选择故障分析或报表 Planner，Planner 将多轮指代改写为独立检索问题，并根据用户选择的 PostgreSQL/DB2 方言，从外部批准目录中选择查询。Agent 根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
 
 ```text
 POST {DIFY_BASE_URL}/datasets/{DIFY_DATASET_ID}/retrieve
@@ -148,6 +151,7 @@ Authorization: Bearer {DIFY_API_KEY}
   "taskId": 12,
   "prompt": "总结设备巡检记录",
   "modelProvider": "deepseek",
+  "databaseType": "postgresql",
   "messages": [
     { "role": "user", "content": "上一轮问题" },
     { "role": "assistant", "content": "上一轮回答" },
@@ -166,7 +170,7 @@ Authorization: Bearer {DIFY_API_KEY}
 {"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 写入 Redis，Gin 再向浏览器推送。报表任务会把 Markdown、证据 JSON 和 DB2 查询 CSV 写入 MinIO；任务的 `answer`、模型信息和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
+FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 写入 Redis，Gin 再向浏览器推送。报表任务会把 Markdown、证据 JSON 和数据库查询 CSV 写入 MinIO；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 
 ### 2.2 RabbitMQ 消息
 
@@ -178,6 +182,7 @@ FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。
   "ownerId": 1,
   "prompt": "总结设备巡检记录",
   "modelProvider": "deepseek",
+  "databaseType": "postgresql",
   "conversationId": 8,
   "createdAt": "2026-07-26T12:00:00.000Z"
 }
@@ -190,6 +195,7 @@ Worker 根据 `conversationId` 从 PostgreSQL 读取最近 `AI_CONTEXT_TURNS` �
   "taskId": 12,
   "prompt": "第二个问题",
   "modelProvider": "deepseek",
+  "databaseType": "postgresql",
   "messages": [
     { "role": "user", "content": "第一个问题" },
     { "role": "assistant", "content": "第一个回答" },

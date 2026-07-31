@@ -1,4 +1,4 @@
-"""LangGraph Agent 图：分流 → 规划 → Dify取证 → DB2取证 → 汇总上下文。"""
+"""LangGraph Agent 图：分流 → 规划 → Dify取证 → 数据库取证 → 汇总上下文。"""
 
 import asyncio
 import json
@@ -9,9 +9,9 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.catalog import QueryCatalog, load_query_catalog
-from app.agent.db2_tool import Db2ToolError, execute_catalog_query
+from app.agent.database_tool import DatabaseToolError, execute_catalog_query
 from app.agent.planners import choose_intent, create_plan
-from app.agent.types import AgentPlan, AgentState
+from app.agent.types import AgentPlan, AgentState, DatabaseType
 from app.config.settings import get_settings
 from app.dify import DifyKnowledgeError, retrieve_knowledge
 
@@ -46,6 +46,7 @@ async def _planner_node(state: AgentState) -> dict[str, object]:
         state["provider"],
         state["messages"],
         catalog,
+        state["database_type"],
     )
     logger.info(
         "Agent plan ready: task_id=%s intent=%s queries=%d report=%s notify=%s",
@@ -95,7 +96,7 @@ async def knowledge_tool_node(state: AgentState) -> dict[str, object]:
         }
 
 
-async def db2_tool_node(state: AgentState) -> dict[str, object]:
+async def database_tool_node(state: AgentState) -> dict[str, object]:
     plan = AgentPlan.model_validate(state["plan"])
     catalog: QueryCatalog = load_query_catalog()
     observations = list(state.get("observations", []))
@@ -104,7 +105,8 @@ async def db2_tool_node(state: AgentState) -> dict[str, object]:
         if query is None:
             observations.append(
                 {
-                    "tool": "db2_query",
+                    "tool": "database_query",
+                    "databaseType": state["database_type"],
                     "queryId": request.query_id,
                     "status": "rejected",
                     "message": "查询不在批准目录中",
@@ -116,12 +118,14 @@ async def db2_tool_node(state: AgentState) -> dict[str, object]:
                 execute_catalog_query,
                 query,
                 request.parameters,
+                state["database_type"],
             )
-            observations.append({"tool": "db2_query", **result})
-        except Db2ToolError as error:
+            observations.append({"tool": "database_query", **result})
+        except DatabaseToolError as error:
             observations.append(
                 {
-                    "tool": "db2_query",
+                    "tool": "database_query",
+                    "databaseType": state["database_type"],
                     "queryId": request.query_id,
                     "status": "error",
                     "message": str(error),
@@ -149,8 +153,8 @@ def context_builder_node(state: AgentState) -> dict[str, object]:
         f"输出要求：{report_instruction}\n\n"
         "[Dify知识库证据]\n"
         f"{state.get('knowledge_context') or '未取得知识库证据。'}\n\n"
-        "[DB2及工具证据]\n"
-        f"{evidence or '本次没有执行DB2查询。'}\n\n"
+        f"[{state['database_type']}及工具证据]\n"
+        f"{evidence or '本次没有执行数据库查询。'}\n\n"
         "只能依据以上证据和对话作答，不得虚构数据库记录、指标或已执行动作。"
     )
     return {"agent_context": context}
@@ -164,7 +168,7 @@ def build_agent_graph():
     builder.add_node("incident_analysis", incident_planner_node)
     builder.add_node("report_generation", report_planner_node)
     builder.add_node("dify_knowledge_tool", knowledge_tool_node)
-    builder.add_node("db2_query_tool", db2_tool_node)
+    builder.add_node("database_query_tool", database_tool_node)
     builder.add_node("context_builder", context_builder_node)
     builder.add_edge(START, "supervisor")
     builder.add_conditional_edges(
@@ -177,8 +181,8 @@ def build_agent_graph():
     )
     builder.add_edge("incident_analysis", "dify_knowledge_tool")
     builder.add_edge("report_generation", "dify_knowledge_tool")
-    builder.add_edge("dify_knowledge_tool", "db2_query_tool")
-    builder.add_edge("db2_query_tool", "context_builder")
+    builder.add_edge("dify_knowledge_tool", "database_query_tool")
+    builder.add_edge("database_query_tool", "context_builder")
     builder.add_edge("context_builder", END)
     return builder.compile()
 
@@ -191,6 +195,7 @@ async def prepare_agent(
     prompt: str,
     provider: str,
     messages: list[dict[str, str]],
+    database_type: DatabaseType = "postgresql",
 ) -> AgentPreparation:
     """运行取证图；现有 Worker 仍只需调用原来的 FastAPI `/process`。"""
 
@@ -199,6 +204,7 @@ async def prepare_agent(
             "task_id": task_id,
             "prompt": prompt,
             "provider": provider,
+            "database_type": database_type,
             "messages": messages,
             "observations": [],
         }
@@ -210,4 +216,3 @@ async def prepare_agent(
         context=str(result["agent_context"]),
         observations=list(result.get("observations", [])),
     )
-

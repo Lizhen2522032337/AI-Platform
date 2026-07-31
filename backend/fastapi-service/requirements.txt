@@ -6,3 +6,4 @@ qdrant-client>=1.14,<2
 minio>=7.2,<8
 langgraph>=1.0,<2
 ibm-db>=3.2,<4
+psycopg[binary]>=3.2,<4

@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import * as amqp from 'amqplib';
 
 export interface AiTaskMessage {
@@ -6,6 +11,7 @@ export interface AiTaskMessage {
   ownerId: number;
   prompt: string;
   modelProvider: 'deepseek' | 'qwen';
+  databaseType: 'postgresql' | 'db2';
   conversationId: number | null;
   createdAt: string;
 }
@@ -45,11 +51,10 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
     if (!this.channel) {
       throw new Error('RabbitMQ channel is not ready');
     }
-    this.channel.sendToQueue(
-      this.queue,
-      Buffer.from(JSON.stringify(message)),
-      { persistent: true, contentType: 'application/json' },
-    );
+    this.channel.sendToQueue(this.queue, Buffer.from(JSON.stringify(message)), {
+      persistent: true,
+      contentType: 'application/json',
+    });
     await this.channel.waitForConfirms();
     this.logger.debug(`RabbitMQ publish confirmed: task_id=${message.id}`);
   }

@@ -1,0 +1,50 @@
+{
+  "version": "2",
+  "tables": [
+    {
+      "schema": "public",
+      "name": "ai_tasks",
+      "description": "AI 异步任务主记录；一行代表一轮用户问题和模型回答",
+      "databases": ["postgresql"],
+      "columns": [
+        {
+          "name": "status",
+          "data_type": "VARCHAR(20)",
+          "description": "任务状态：queued、processing、completed、failed",
+          "sensitive": false
+        },
+        {
+          "name": "created_at",
+          "data_type": "TIMESTAMPTZ",
+          "description": "任务创建时间",
+          "sensitive": false
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "id": "task_status_summary",
+      "description": "按时间范围汇总 AI 任务各状态数量",
+      "sql": {
+        "postgresql": "SELECT status, COUNT(*) AS task_count FROM public.ai_tasks WHERE created_at >= :start_time AND created_at < :end_time GROUP BY status ORDER BY status"
+      },
+      "parameters": [
+        {
+          "name": "start_time",
+          "description": "查询开始时间，建议使用 ISO 8601 格式",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "end_time",
+          "description": "查询结束时间，建议使用 ISO 8601 格式",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "result_description": "返回每种任务状态及其数量",
+      "max_rows": 100
+    }
+  ]
+}

@@ -160,6 +160,7 @@ def stream_ai_service(
     task_id: int,
     prompt: str,
     model_provider: str,
+    database_type: str,
     messages: list[dict[str, str]],
 ) -> Iterator[dict[str, Any]]:
     """逐行读取内部 FastAPI 返回的 NDJSON 大模型事件流。"""
@@ -170,6 +171,7 @@ def stream_ai_service(
             "taskId": task_id,
             "prompt": prompt,
             "modelProvider": model_provider,
+            "databaseType": database_type,
             "messages": messages,
         }
     ).encode("utf-8")
@@ -180,9 +182,10 @@ def stream_ai_service(
         method="POST",
     )
     logger.info(
-        "FastAPI stream request started: task_id=%s provider=%s messages=%s",
+        "FastAPI stream request started: task_id=%s provider=%s database=%s messages=%s",
         task_id,
         model_provider,
+        database_type,
         len(messages),
     )
     with urllib.request.urlopen(request, timeout=360) as response:
@@ -206,18 +209,22 @@ def process_message(body: bytes) -> None:
     owner_id = int(message.get("ownerId") or 0)
     prompt = str(message["prompt"])
     model_provider = str(message.get("modelProvider") or "deepseek")
+    database_type = str(message.get("databaseType") or "postgresql")
     conversation_id_value = message.get("conversationId")
     conversation_id = (
         int(conversation_id_value) if conversation_id_value is not None else None
     )
     if model_provider not in {"deepseek", "qwen"}:
         raise RuntimeError("不支持的模型供应商")
+    if database_type not in {"postgresql", "db2"}:
+        raise RuntimeError("不支持的数据库类型")
     logger.info(
-        "task message received: task_id=%s owner_id=%s conversation_id=%s provider=%s prompt_chars=%s",
+        "task message received: task_id=%s owner_id=%s conversation_id=%s provider=%s database=%s prompt_chars=%s",
         task_id,
         owner_id,
         conversation_id,
         model_provider,
+        database_type,
         len(prompt),
     )
     processing_state = {
@@ -225,6 +232,7 @@ def process_message(body: bytes) -> None:
         "ownerId": owner_id,
         "status": "processing",
         "modelProvider": model_provider,
+        "databaseType": database_type,
         "partialText": "",
         "conversationId": conversation_id,
     }
@@ -236,7 +244,9 @@ def process_message(body: bytes) -> None:
     result: dict[str, Any] | None = None
     last_publish = 0.0
     messages = load_conversation_messages(conversation_id, task_id, prompt)
-    for event in stream_ai_service(task_id, prompt, model_provider, messages):
+    for event in stream_ai_service(
+        task_id, prompt, model_provider, database_type, messages
+    ):
         event_type = event.get("type")
         if event_type == "start":
             model_name = str(event.get("model") or "") or None
@@ -290,6 +300,7 @@ def process_message(body: bytes) -> None:
             "ownerId": owner_id,
             "status": "completed",
             "modelProvider": model_provider,
+            "databaseType": database_type,
             "modelName": model_name,
             "conversationId": conversation_id,
             "result": result,
@@ -365,6 +376,7 @@ def consume() -> None:
         owner_id: int | None = None
         conversation_id: int | None = None
         model_provider: str | None = None
+        database_type: str | None = None
         try:
             decoded = json.loads(body.decode("utf-8"))
             task_id = int(decoded["id"])
@@ -374,6 +386,7 @@ def consume() -> None:
                 int(conversation_value) if conversation_value is not None else None
             )
             model_provider = str(decoded.get("modelProvider") or "deepseek")
+            database_type = str(decoded.get("databaseType") or "postgresql")
             process_message(body)
             current_channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as error:  # noqa: BLE001
@@ -390,6 +403,7 @@ def consume() -> None:
                             "status": "failed",
                             "conversationId": conversation_id,
                             "modelProvider": model_provider,
+                            "databaseType": database_type,
                             "errorMessage": message,
                         },
                     )

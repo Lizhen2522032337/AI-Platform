@@ -7,7 +7,7 @@ from typing import cast
 from pydantic import ValidationError
 
 from app.agent.catalog import QueryCatalog
-from app.agent.types import AgentIntent, AgentPlan
+from app.agent.types import AgentIntent, AgentPlan, DatabaseType
 from app.config.settings import Settings, get_settings
 from app.llm import LlmProviderError, ModelProvider, complete_json
 
@@ -46,7 +46,7 @@ def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
     )
 
 
-def _system_prompt(intent: AgentIntent) -> str:
+def _system_prompt(intent: AgentIntent, database_type: DatabaseType) -> str:
     common = """
 你是企业生产系统的受控 Planner。你的职责是规划取证步骤，不负责直接回答。
 只能从 approved_queries 中选择 query_id，绝对不能生成 SQL、命令或虚构查询 ID。
@@ -56,9 +56,14 @@ knowledge_query 必须把多轮对话中的指代改写为可独立检索 Dify �
 intent, objective, knowledge_query, hypotheses, queries, report_required,
 report_title, notify。queries 每项包含 query_id, purpose, parameters。
 """.strip()
+    dialect = (
+        "当前数据源是 PostgreSQL；只选择目录中带 PostgreSQL 方言的查询。"
+        if database_type == "postgresql"
+        else "当前数据源是 DB2；只选择目录中带 DB2 方言的查询。"
+    )
     if intent == "report_generation":
-        return common + "\n当前 Planner 专门规划统计报表，report_required 必须为 true。"
-    return common + "\n当前 Planner 专门分析生产问题，围绕现象、时间窗、影响范围和候选原因规划取证。"
+        return common + f"\n{dialect}\n当前 Planner 专门规划统计报表，report_required 必须为 true。"
+    return common + f"\n{dialect}\n当前 Planner 专门分析生产问题，围绕现象、时间窗、影响范围和候选原因规划取证。"
 
 
 async def create_plan(
@@ -67,20 +72,23 @@ async def create_plan(
     provider: str,
     messages: list[dict[str, str]],
     catalog: QueryCatalog,
+    database_type: DatabaseType,
     settings: Settings | None = None,
 ) -> AgentPlan:
     """调用对应 Planner，并在执行前裁剪未知查询和超出上限的步骤。"""
 
     current = settings or get_settings()
-    catalog_text = json.dumps(catalog.planner_summary(), ensure_ascii=False)
+    catalog_text = json.dumps(
+        catalog.planner_summary(database_type), ensure_ascii=False
+    )
     user_prompt = (
         f"当前请求：\n{prompt}\n\n最近对话：\n{_history_text(messages)}"
-        f"\n\nDB2业务字典与批准查询：\n{catalog_text[:30000]}"
+        f"\n\n当前数据库：{database_type}\n业务字典与批准查询：\n{catalog_text[:30000]}"
     )
     try:
         raw = await complete_json(
             cast(ModelProvider, provider),
-            _system_prompt(intent),
+            _system_prompt(intent, database_type),
             user_prompt,
         )
         plan = AgentPlan.model_validate(raw)
@@ -92,7 +100,9 @@ async def create_plan(
         )
         return _fallback_plan(intent, prompt)
 
-    allowed_ids = {query.id for query in catalog.queries}
+    allowed_ids = {
+        query.id for query in catalog.queries if query.supports(database_type)
+    }
     approved_queries = [query for query in plan.queries if query.query_id in allowed_ids]
     rejected_count = len(plan.queries) - len(approved_queries)
     if rejected_count:
@@ -114,4 +124,3 @@ async def create_plan(
         and current.notification_auto_send
     )
     return plan
-

@@ -15,12 +15,16 @@ import { AdminUsersPanel } from './components/AdminUsersPanel'
 import { LoginScreen } from './components/LoginScreen'
 import type { AuthUser } from './types/auth'
 import type { ChatConversation } from './types/conversation'
-import type { AiTask, ModelProvider, TaskEvent } from './types/task'
+import type { AiTask, DatabaseType, ModelProvider, TaskEvent } from './types/task'
 import './App.css'
 
 function modelLabel(provider: ModelProvider) {
   // 后端只接受稳定的 provider code，中文名称仅用于界面显示。
   return provider === 'qwen' ? '通义千问' : 'DeepSeek'
+}
+
+function databaseLabel(databaseType: DatabaseType) {
+  return databaseType === 'db2' ? 'DB2' : 'PostgreSQL'
 }
 
 function App() {
@@ -33,6 +37,8 @@ function App() {
   const [tasks, setTasks] = useState<AiTask[]>([])
   const [prompt, setPrompt] = useState('')
   const [modelProvider, setModelProvider] = useState<ModelProvider>('deepseek')
+  // 数据源随每轮任务持久化；DB2 暂不可用时仍可保留选项并返回明确错误。
+  const [databaseType, setDatabaseType] = useState<DatabaseType>('postgresql')
   // 界面状态：首次加载、提交中、错误提示、管理员视图和移动端侧栏。
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -106,6 +112,7 @@ function App() {
         })),
       )
       setModelProvider(detail.conversation.modelProvider)
+      setDatabaseType(detail.conversation.databaseType ?? 'postgresql')
       setError('')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '消息加载失败')
@@ -197,7 +204,7 @@ function App() {
     try {
       let conversationId = activeConversationId
       if (!conversationId) {
-        const conversation = await conversationsApi.create(modelProvider)
+        const conversation = await conversationsApi.create(modelProvider, databaseType)
         console.info('[conversation] created', { conversationId: conversation.id })
         conversationId = conversation.id
         setActiveConversationId(conversation.id)
@@ -207,11 +214,13 @@ function App() {
         conversationId,
         content,
         modelProvider,
+        databaseType,
       )
       console.info('[task] submitted', {
         conversationId,
         taskId: response.task.id,
         provider: modelProvider,
+        database: databaseType,
       })
       setTasks((current) => [...current, response.task])
       setConversations((current) => [
@@ -372,16 +381,28 @@ function App() {
             {!showAdmin && <small>{activeTask ? 'AI 正在回答…' : '消息通过企业异步链路安全处理'}</small>}
           </div>
           {!showAdmin && (
-            <select
-              aria-label="选择大模型"
-              className="model-select"
-              disabled={Boolean(activeTask)}
-              onChange={(event) => setModelProvider(event.target.value as ModelProvider)}
-              value={modelProvider}
-            >
-              <option value="deepseek">DeepSeek</option>
-              <option value="qwen">通义千问</option>
-            </select>
+            <div className="header-selects">
+              <select
+                aria-label="选择查询数据库"
+                className="database-select"
+                disabled={Boolean(activeTask)}
+                onChange={(event) => setDatabaseType(event.target.value as DatabaseType)}
+                value={databaseType}
+              >
+                <option value="postgresql">PostgreSQL</option>
+                <option value="db2">DB2</option>
+              </select>
+              <select
+                aria-label="选择大模型"
+                className="model-select"
+                disabled={Boolean(activeTask)}
+                onChange={(event) => setModelProvider(event.target.value as ModelProvider)}
+                value={modelProvider}
+              >
+                <option value="deepseek">DeepSeek</option>
+                <option value="qwen">通义千问</option>
+              </select>
+            </div>
           )}
         </header>
 
@@ -415,7 +436,7 @@ function App() {
                       <div className="message-row assistant-message">
                         <div className="message-avatar assistant-avatar">EA</div>
                         <div className="message-content">
-                          <div className="message-meta">Enterprise AI <span>{modelLabel(task.modelProvider)}{task.modelName ? ` · ${task.modelName}` : ''}</span></div>
+                          <div className="message-meta">Enterprise AI <span>{modelLabel(task.modelProvider)} · {databaseLabel(task.databaseType ?? 'postgresql')}{task.modelName ? ` · ${task.modelName}` : ''}</span></div>
                           <div className="message-text assistant-text">
                             {answer || (task.status === 'failed' ? '本次回答失败。' : '正在思考…')}
                             {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
@@ -453,7 +474,7 @@ function App() {
                     {submitting ? '…' : '↑'}
                   </button>
                 </form>
-                <small className="composer-hint">Enter 发送，Shift + Enter 换行 · 当前模型：{modelLabel(modelProvider)}</small>
+                <small className="composer-hint">Enter 发送，Shift + Enter 换行 · 当前模型：{modelLabel(modelProvider)} · 数据库：{databaseLabel(databaseType)}</small>
               </div>
             )}
           </>

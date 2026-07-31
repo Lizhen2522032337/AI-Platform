@@ -21,6 +21,7 @@ function conversation(): ChatConversation {
     id: 3,
     title: '新对话',
     modelProvider: 'deepseek',
+    databaseType: 'postgresql',
     createdById: 7,
     createdAt: new Date('2026-07-28T00:00:00.000Z'),
     updatedAt: new Date('2026-07-28T00:00:00.000Z'),
@@ -75,23 +76,31 @@ describe('ConversationsService', () => {
     const current = conversation();
     const task = { id: 9 } as AiTask;
     conversations.findOneBy.mockResolvedValue(current);
-    conversations.save.mockImplementation(async (value) => value as ChatConversation);
+    conversations.save.mockImplementation(
+      async (value) => value as ChatConversation,
+    );
     tasks.exists.mockResolvedValue(false);
     tasksService.create.mockResolvedValue(task);
 
     const result = await service.sendMessage(
       3,
-      { content: '请记住我的项目名称是星河计划', modelProvider: 'qwen' },
+      {
+        content: '请记住我的项目名称是星河计划',
+        modelProvider: 'qwen',
+        databaseType: 'postgresql',
+      },
       user,
     );
 
     expect(result.task).toBe(task);
     expect(result.conversation.title).toBe('请记住我的项目名称是星河计划');
     expect(result.conversation.modelProvider).toBe('qwen');
+    expect(result.conversation.databaseType).toBe('postgresql');
     expect(tasksService.create).toHaveBeenCalledWith(
       {
         prompt: '请记住我的项目名称是星河计划',
         modelProvider: 'qwen',
+        databaseType: 'postgresql',
       },
       user,
       3,
@@ -124,7 +133,9 @@ describe('ConversationsService', () => {
       { id: 12, status: 'processing', objectKey: null } as AiTask,
     ]);
 
-    await expect(service.remove(3, user)).rejects.toMatchObject({ status: 409 });
+    await expect(service.remove(3, user)).rejects.toMatchObject({
+      status: 409,
+    });
     expect(artifactsService.deleteTaskArtifacts).not.toHaveBeenCalled();
     expect(conversations.remove).not.toHaveBeenCalled();
   });

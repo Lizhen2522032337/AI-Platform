@@ -71,8 +71,8 @@ enterprise-ai-platform/
 4. NestJS 把持久化消息写入 RabbitMQ quorum queue。
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
 6. Worker 从 PostgreSQL 读取该会话最近若干轮已完成问答，组装 `user/assistant` 消息历史，再调用 FastAPI `/process`。
-7. FastAPI 的 LangGraph Supervisor 分流到故障分析 Planner 或报表 Planner；Planner 生成独立知识检索问题并只能选择批准的 DB2 查询 ID。
-8. Agent 依次调用 Dify Knowledge Tool 和 DB2 只读查询 Tool，汇总带来源的事实、推断与未知信息。
+7. FastAPI 的 LangGraph Supervisor 分流到故障分析 Planner 或报表 Planner；Planner 生成独立知识检索问题，并按前端选择的 PostgreSQL/DB2 方言选择批准查询 ID。
+8. Agent 依次调用 Dify Knowledge Tool 和统一只读数据库 Tool，汇总带来源的事实、推断与未知信息。
 9. FastAPI 把 Agent 证据作为受控参考资料，根据 `modelProvider` 调用 DeepSeek 或通义千问，并同时发送完整对话历史。
 10. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
 11. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
@@ -84,11 +84,11 @@ enterprise-ai-platform/
 - Nginx 向局域网发布 TCP 80；PostgreSQL 可选仅绑定宿主机 `127.0.0.1:5432` 供 SSH 隧道使用。
 - Redis、RabbitMQ、Qdrant、MinIO、NestJS、FastAPI、Gin、Worker 均只在 Compose 网络通信。
 - PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 使用独立 Docker 具名卷。
-- 真实配置全部位于 `/etc/enterprise-ai-platform`，不写入 Git；API Key 位于 `llm.env`，DB2 DSN 和通知 Webhook 位于 `agent.env`，仅注入 FastAPI。
+- 真实配置全部位于 `/etc/enterprise-ai-platform`，不写入 Git；API Key 位于 `llm.env`，PostgreSQL 密码位于 `database.env`，DB2 DSN 和通知 Webhook 位于 `agent.env`，仅注入需要它们的容器。
 - Docker Compose 更新应用时不得使用 `down -v`，避免删除数据卷。
 
 ## 5. 当前 AI 实现边界
 
-本版本通过 LangGraph 显式状态图编排 Planner、Dify、DB2、报表文件和通知 Tool，再通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问。DB2 默认关闭且只允许外部查询目录中的只读参数化 SQL；详细边界和必备资料见 `docs/agent-architecture.md`。Qdrant 当前仍使用演示向量；真正的知识检索由 Dify 完成。
+本版本通过 LangGraph 显式状态图编排 Planner、Dify、PostgreSQL/DB2、报表文件和通知 Tool，再通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问。数据库 Tool 只允许外部查询目录中的只读参数化 SQL；详细边界和必备资料见 `docs/agent-architecture.md`。Qdrant 当前仍使用演示向量；真正的知识检索由 Dify 完成。
 
 DeepSeek 和通义千问的 Chat Completions 接口本身不替本项目保存历史。平台以 `chat_conversations` 和 `ai_tasks` 持久化会话，每次最多加载 `AI_CONTEXT_TURNS` 轮完整问答，默认 10、最大 20，以控制 Token 成本。旧的单轮任务在 `004_add_chat_conversations.sql` 中自动转换为独立历史会话。

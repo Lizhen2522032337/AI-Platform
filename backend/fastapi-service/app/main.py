@@ -13,6 +13,7 @@ from starlette.responses import StreamingResponse
 from app.agent import AgentPreparation, prepare_agent
 from app.agent.notification_tool import NotificationToolError, send_notification
 from app.agent.report_tools import create_report_files
+from app.agent.types import DatabaseType
 from app.config.settings import get_settings
 from app.dify import DifyKnowledgeError, retrieve_knowledge
 from app.integrations import check_integrations, delete_results, save_result
@@ -39,6 +40,7 @@ class ProcessRequest(BaseModel):
     task_id: int = Field(alias="taskId", gt=0)
     prompt: str = Field(min_length=1, max_length=4000)
     model_provider: ModelProvider = Field(alias="modelProvider")
+    database_type: DatabaseType = Field(default="postgresql", alias="databaseType")
     messages: list[ConversationMessage] = Field(min_length=1, max_length=41)
 
 
@@ -96,9 +98,10 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
     model = ""
     preparation: AgentPreparation | None = None
     logger.info(
-        "AI task accepted: task_id=%s provider=%s history_messages=%d prompt_chars=%d",
+        "AI task accepted: task_id=%s provider=%s database=%s history_messages=%d prompt_chars=%d",
         payload.task_id,
         payload.model_provider,
+        payload.database_type,
         len(payload.messages),
         len(payload.prompt),
     )
@@ -114,6 +117,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 payload.prompt,
                 payload.model_provider,
                 history,
+                payload.database_type,
             )
             evidence_context = preparation.context
             logger.info(
@@ -179,6 +183,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             {
                 "enabled": preparation is not None,
                 "intent": preparation.intent if preparation else "direct_chat",
+                "databaseType": payload.database_type,
                 "reportRequired": preparation.plan.report_required if preparation else False,
                 "notificationSent": notification_sent,
             },

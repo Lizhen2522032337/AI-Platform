@@ -180,7 +180,14 @@
 .header-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .header-title small { margin-top: 3px; color: #999; font-size: .72rem; }
 
-.model-select {
+.header-selects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-select,
+.database-select {
   width: auto;
   min-width: 136px;
   padding: 9px 34px 9px 12px;
@@ -189,6 +196,8 @@
   color: #ececec;
   background: #2b2b2b;
 }
+
+.database-select { min-width: 132px; }
 
 .messages-scroll {
   min-height: 0;
@@ -369,7 +378,9 @@
   .composer-zone { left: 0; padding-right: 14px; padding-left: 14px; }
   .chat-header { padding: 0 14px; }
   .header-title small { display: none; }
-  .model-select { min-width: 118px; }
+  .header-selects { gap: 5px; }
+  .model-select,
+  .database-select { min-width: 106px; padding-right: 26px; }
   .messages-column { width: min(100% - 28px, 820px); }
   .suggestion-grid { grid-template-columns: 1fr; }
   .message-row { grid-template-columns: 30px minmax(0,1fr); gap: 10px; }
@@ -385,4 +396,8 @@
 @media (max-width: 560px) {
   .user-create-form { grid-template-columns: 1fr; }
   .chat-welcome p { max-width: 300px; }
+  .header-title small { display: none; }
+  .header-selects { flex-direction: column; gap: 3px; }
+  .model-select,
+  .database-select { min-width: 102px; padding-top: 4px; padding-bottom: 4px; font-size: .72rem; }
 }

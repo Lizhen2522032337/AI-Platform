@@ -1,4 +1,4 @@
-"""报表生成与文件生成 Tool：Markdown、证据 JSON 和 DB2 查询 CSV。"""
+"""报表生成与文件生成 Tool：Markdown、证据 JSON 和数据库查询 CSV。"""
 
 import csv
 import io
@@ -63,7 +63,7 @@ def create_report_files(
     artifacts.append({"name": "证据清单.json", "kind": "evidence", **evidence})
 
     for observation in observations:
-        if observation.get("tool") != "db2_query" or observation.get("status") != "ok":
+        if observation.get("tool") not in {"database_query", "db2_query"} or observation.get("status") != "ok":
             continue
         rows = observation.get("rows")
         columns = observation.get("columns")
@@ -80,4 +80,3 @@ def create_report_files(
         )
     logger.info("Agent report files created: task_id=%s files=%d", task_id, len(artifacts))
     return artifacts
-

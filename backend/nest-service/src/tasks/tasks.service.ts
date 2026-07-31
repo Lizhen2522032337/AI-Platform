@@ -58,6 +58,7 @@ export class TasksService {
         objectKey: null,
         vectorId: null,
         modelProvider: payload.modelProvider,
+        databaseType: payload.databaseType,
         modelName: null,
         answer: null,
         createdById: user.id,
@@ -65,7 +66,7 @@ export class TasksService {
       }),
     );
     this.logger.log(
-      `task persisted: task_id=${task.id} user_id=${user.id} conversation_id=${conversationId ?? 'none'} provider=${task.modelProvider}`,
+      `task persisted: task_id=${task.id} user_id=${user.id} conversation_id=${conversationId ?? 'none'} provider=${task.modelProvider} database=${task.databaseType}`,
     );
 
     try {
@@ -75,6 +76,7 @@ export class TasksService {
         ownerId: user.id,
         status: task.status,
         modelProvider: task.modelProvider,
+        databaseType: task.databaseType,
         conversationId,
       });
       await this.rabbitService.publishTask({
@@ -82,6 +84,7 @@ export class TasksService {
         ownerId: user.id,
         prompt: task.prompt,
         modelProvider: task.modelProvider,
+        databaseType: task.databaseType,
         conversationId,
         createdAt: task.createdAt.toISOString(),
       });
@@ -99,12 +102,15 @@ export class TasksService {
           ownerId: user.id,
           status: task.status,
           modelProvider: task.modelProvider,
+          databaseType: task.databaseType,
           conversationId,
           errorMessage: task.errorMessage,
         });
       } catch {
         // 原始依赖异常继续向上抛出，避免 Redis 二次异常覆盖根因。
-        this.logger.warn(`failed task state could not be cached: task_id=${task.id}`);
+        this.logger.warn(
+          `failed task state could not be cached: task_id=${task.id}`,
+        );
       }
       throw error;
     }
