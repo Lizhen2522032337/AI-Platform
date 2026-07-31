@@ -19,6 +19,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/deploy/docker-compose.yml"
 readonly DATABASE_ENV_FILE="${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}"
 readonly PLATFORM_ENV_FILE="${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}"
 readonly LLM_ENV_FILE="${LLM_ENV_FILE:-/etc/enterprise-ai-platform/llm.env}"
+readonly AGENT_ENV_FILE="${AGENT_ENV_FILE:-/etc/enterprise-ai-platform/agent.env}"
 readonly DATABASE_MODE="${DATABASE_MODE:-managed}"
 readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
 readonly DEPLOY_LOCK_DIR="${DEPLOY_STATE_DIR}/deploy.lock"
@@ -26,7 +27,7 @@ readonly -a INFRASTRUCTURE_SERVICES=(redis rabbitmq qdrant minio)
 readonly -a APPLICATION_SERVICES=(frontend fastapi-service nest-service gin-service worker)
 readonly -a BACKEND_SERVICES=(fastapi-service nest-service gin-service worker)
 readonly -a DATABASE_SERVICES=(nest-service worker)
-export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE
+export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"

@@ -125,14 +125,14 @@ data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"dee
 
 ### 2.1 FastAPI AI 服务
 
-FastAPI 在调用模型前，根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
+FastAPI 在调用模型前运行 LangGraph Agent。Supervisor 选择故障分析或报表 Planner，Planner 将多轮指代改写为独立检索问题，并根据外部批准目录选择 DB2 查询。Agent 根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
 
 ```text
 POST {DIFY_BASE_URL}/datasets/{DIFY_DATASET_ID}/retrieve
 Authorization: Bearer {DIFY_API_KEY}
 ```
 
-请求只包含当前问题。返回知识块按 `DIFY_SCORE_THRESHOLD`、`DIFY_TOP_K` 和
+请求包含 Planner 生成的独立知识检索问题。返回知识块按 `DIFY_SCORE_THRESHOLD`、`DIFY_TOP_K` 和
 `DIFY_MAX_CONTEXT_CHARS` 过滤后注入系统提示词。Key、问题正文和知识块正文均不会写入日志。
 
 | 方法 | 内部路径 | 说明 |
@@ -166,7 +166,7 @@ Authorization: Bearer {DIFY_API_KEY}
 {"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 写入 Redis，Gin 再向浏览器推送。完整回答会写入 MinIO，任务的 `answer`、模型信息和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
+FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 写入 Redis，Gin 再向浏览器推送。报表任务会把 Markdown、证据 JSON 和 DB2 查询 CSV 写入 MinIO；任务的 `answer`、模型信息和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 
 ### 2.2 RabbitMQ 消息
 

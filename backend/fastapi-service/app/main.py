@@ -10,10 +10,13 @@ from fastapi import FastAPI, Response, status
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+from app.agent import AgentPreparation, prepare_agent
+from app.agent.notification_tool import NotificationToolError, send_notification
+from app.agent.report_tools import create_report_files
+from app.config.settings import get_settings
 from app.dify import DifyKnowledgeError, retrieve_knowledge
 from app.integrations import check_integrations, delete_results, save_result
 from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
-
 
 # 统一 FastAPI 及其子模块日志级别；生产日志不包含提示词、知识正文或密钥。
 logging.basicConfig(
@@ -86,11 +89,12 @@ def ndjson(event: dict[str, object]) -> bytes:
 
 
 async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
-    """先检索 Dify，再调用大模型；完成后持久化答案并发送最终事件。"""
+    """运行 LangGraph Agent，再流式生成回答并持久化报告产物。"""
 
     answer_parts: list[str] = []
     usage: dict[str, object] | None = None
     model = ""
+    preparation: AgentPreparation | None = None
     logger.info(
         "AI task accepted: task_id=%s provider=%s history_messages=%d prompt_chars=%d",
         payload.task_id,
@@ -99,26 +103,35 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         len(payload.prompt),
     )
     try:
-        # 只使用当前问题检索知识库；历史消息仍完整交给大模型维持多轮语义。
-        knowledge = await retrieve_knowledge(payload.prompt)
-        logger.info(
-            "AI task knowledge ready: task_id=%s enabled=%s hits=%d",
-            payload.task_id,
-            knowledge.enabled,
-            knowledge.hit_count,
-        )
         history: list[ChatMessage] = [
             {"role": message.role, "content": message.content}
             for message in payload.messages
         ]
-        # “没有命中”也明确告诉模型，避免用户误以为回答一定来自企业知识库。
-        knowledge_context = knowledge.context
-        if knowledge.enabled and not knowledge_context:
-            knowledge_context = "[知识库检索结果]\n本次问题未检索到相关知识块。"
+        settings = get_settings()
+        if settings.agent_enabled:
+            preparation = await prepare_agent(
+                payload.task_id,
+                payload.prompt,
+                payload.model_provider,
+                history,
+            )
+            evidence_context = preparation.context
+            logger.info(
+                "Agent evidence ready: task_id=%s intent=%s queries=%d",
+                payload.task_id,
+                preparation.intent,
+                len(preparation.plan.queries),
+            )
+        else:
+            # 保留紧急回退开关：关闭 Agent 时仍使用原来的 Dify → LLM 流程。
+            knowledge = await retrieve_knowledge(payload.prompt)
+            evidence_context = knowledge.context
+            if knowledge.enabled and not evidence_context:
+                evidence_context = "[知识库检索结果]\n本次问题未检索到相关知识块。"
         async for event in stream_chat(
             payload.model_provider,
             history,
-            knowledge_context,
+            evidence_context,
         ):
             if event["type"] == "start":
                 model = str(event["model"])
@@ -131,6 +144,30 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         answer = "".join(answer_parts).strip()
         if not answer:
             raise LlmProviderError("大模型没有返回有效回答")
+        artifacts: list[dict[str, object]] = []
+        if preparation is not None and preparation.plan.report_required:
+            artifacts = create_report_files(
+                payload.task_id,
+                preparation.plan.report_title,
+                answer,
+                preparation.observations,
+            )
+        notification_sent = False
+        if preparation is not None and preparation.plan.notify:
+            try:
+                notification_sent = await send_notification(
+                    payload.task_id,
+                    preparation.plan.report_title,
+                    answer,
+                    artifacts,
+                )
+            except NotificationToolError as error:
+                # 通知不是分析结果的事务边界；失败会记录，但不丢弃已经完成的报告。
+                logger.warning(
+                    "Agent notification skipped after failure: task_id=%s error=%s",
+                    payload.task_id,
+                    error,
+                )
         result = save_result(
             payload.task_id,
             payload.prompt,
@@ -138,6 +175,13 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             payload.model_provider,
             model,
             usage,
+            artifacts,
+            {
+                "enabled": preparation is not None,
+                "intent": preparation.intent if preparation else "direct_chat",
+                "reportRequired": preparation.plan.report_required if preparation else False,
+                "notificationSent": notification_sent,
+            },
         )
         logger.info(
             "AI task completed: task_id=%s provider=%s model=%s answer_chars=%d",

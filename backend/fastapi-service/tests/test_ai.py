@@ -1,12 +1,13 @@
 """FastAPI AI 服务接口测试。"""
 
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from app import main
-from app.dify import KnowledgeResult
-
+from app.agent.graph import AgentPreparation
+from app.agent.types import AgentPlan
 
 client = TestClient(main.app)
 
@@ -25,12 +26,19 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
-    async def fake_retrieve(query):
-        assert query == "测试任务"
-        return KnowledgeResult(
-            enabled=True,
+    async def fake_prepare(task_id, prompt, provider, messages):
+        assert (task_id, prompt, provider) == (7, "测试任务", "qwen")
+        assert messages[-1] == {"role": "user", "content": "测试任务"}
+        return AgentPreparation(
+            intent="incident_analysis",
+            plan=AgentPlan(
+                intent="incident_analysis",
+                objective="测试任务",
+                knowledge_query="测试任务",
+                report_required=False,
+            ),
             context="[知识库 1]\n测试知识",
-            hit_count=1,
+            observations=[],
         )
 
     async def fake_stream(provider, messages, knowledge_context):
@@ -45,18 +53,21 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
         yield {"type": "delta", "text": "处理"}
         yield {"type": "delta", "text": "完成"}
 
-    monkeypatch.setattr(main, "retrieve_knowledge", fake_retrieve)
+    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(agent_enabled=True))
+    monkeypatch.setattr(main, "prepare_agent", fake_prepare)
     monkeypatch.setattr(main, "stream_chat", fake_stream)
     monkeypatch.setattr(
         main,
         "save_result",
-        lambda task_id, _prompt, answer, provider, model, _usage: {
+        lambda task_id, _prompt, answer, provider, model, _usage, artifacts, metadata: {
             "taskId": task_id,
             "text": answer,
             "provider": provider,
             "model": model,
             "vectorId": str(task_id),
             "objectKey": f"tasks/{task_id}/result.json",
+            "artifacts": artifacts,
+            "agent": metadata,
         },
     )
     response = client.post(
@@ -77,6 +88,7 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     assert events[1] == {"type": "delta", "text": "处理"}
     assert events[-1]["type"] == "complete"
     assert events[-1]["result"]["text"] == "处理完成"
+    assert events[-1]["result"]["agent"]["intent"] == "incident_analysis"
 
 
 def test_process_rejects_blank_prompt() -> None:

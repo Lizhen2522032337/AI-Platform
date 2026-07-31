@@ -1,6 +1,6 @@
 """集中读取 FastAPI 的基础设施、大模型和 Dify 知识库配置。
 
-真实密钥全部由虚拟机上的 ``/etc/enterprise-ai-platform/llm.env`` 注入。
+真实密钥由虚拟机上的 ``llm.env`` 和 ``agent.env`` 注入。
 本模块只声明配置结构，不把密钥打印到日志，也不允许浏览器直接获取配置。
 """
 
@@ -41,6 +41,28 @@ class Settings(BaseSettings):
     dify_score_threshold: float = 0.3
     dify_request_timeout_seconds: float = 20
     dify_max_context_chars: int = 12000
+
+    # LangGraph Agent 的执行边界。Planner 只能选择外部目录中登记的查询，
+    # 不能把模型生成的任意 SQL 直接交给生产 DB2。
+    agent_enabled: bool = True
+    agent_max_queries: int = 6
+    agent_max_evidence_chars: int = 24000
+
+    # DB2 连接串和查询目录只存在于虚拟机；默认关闭，保证尚未提供生产配置时
+    # FastAPI 仍可使用 Dify 和大模型完成普通问答。
+    db2_enabled: bool = False
+    db2_dsn: SecretStr | None = None
+    db2_catalog_file: str = "/etc/enterprise-ai-platform/db2-catalog.json"
+    db2_query_timeout_seconds: int = 30
+    db2_max_rows: int = 500
+
+    # 报告文件默认写入现有 MinIO。通知使用通用 Webhook，且默认不自动发送，
+    # 后续确定企业微信、钉钉或其他渠道后可替换适配器。
+    report_files_enabled: bool = True
+    notification_enabled: bool = False
+    notification_auto_send: bool = False
+    notification_webhook_url: SecretStr | None = None
+    notification_timeout_seconds: float = 10
 
     # 单次大模型调用的超时和最大输出长度，用于限制资源占用和费用。
     llm_request_timeout_seconds: float = 300

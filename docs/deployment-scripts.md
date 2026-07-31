@@ -12,6 +12,8 @@
 | PostgreSQL 配置 | `/etc/enterprise-ai-platform/database.env` |
 | Redis/RabbitMQ/MinIO 等配置 | `/etc/enterprise-ai-platform/platform.env` |
 | DeepSeek/千问 API 配置 | `/etc/enterprise-ai-platform/llm.env` |
+| Agent/DB2/通知配置 | `/etc/enterprise-ai-platform/agent.env` |
+| DB2业务与批准查询目录 | `/etc/enterprise-ai-platform/db2-catalog.json` |
 | 部署分支和数据库模式 | `/etc/enterprise-ai-platform/deploy.env` |
 
 启动顺序：
@@ -59,6 +61,7 @@ sudo install -d -m 700 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
 install -m 600 /dev/null /etc/enterprise-ai-platform/database.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/platform.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/llm.env
+install -m 600 /dev/null /etc/enterprise-ai-platform/agent.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/deploy.env
 ```
 
@@ -163,7 +166,34 @@ LLM_MAX_TOKENS=2048
 chmod 600 /etc/enterprise-ai-platform/llm.env
 ```
 
-### 3.5 部署行为配置
+### 3.5 Agent 配置
+
+第一阶段可以暂不连接 DB2，先创建以下安全配置：
+
+```bash
+vi /etc/enterprise-ai-platform/agent.env
+```
+
+```dotenv
+AGENT_ENABLED=true
+AGENT_MAX_QUERIES=6
+AGENT_MAX_EVIDENCE_CHARS=24000
+DB2_ENABLED=false
+DB2_CATALOG_FILE=/etc/enterprise-ai-platform/db2-catalog.json
+DB2_QUERY_TIMEOUT_SECONDS=30
+DB2_MAX_ROWS=500
+REPORT_FILES_ENABLED=true
+NOTIFICATION_ENABLED=false
+NOTIFICATION_AUTO_SEND=false
+```
+
+```bash
+chmod 600 /etc/enterprise-ai-platform/agent.env
+```
+
+DB2 DSN、查询目录和通知配置的要求见 `docs/agent-architecture.md`。启用 DB2 前必须使用只读账号，并把审核后的目录保存为 `/etc/enterprise-ai-platform/db2-catalog.json`。
+
+### 3.6 部署行为配置
 
 ```bash
 vi /etc/enterprise-ai-platform/deploy.env
@@ -177,6 +207,7 @@ DATABASE_MODE=managed
 DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
 PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
 LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
+AGENT_ENV_FILE=/etc/enterprise-ai-platform/agent.env
 ```
 
 `managed` 表示 Compose 负责运行 PostgreSQL。以后使用外部数据库时改为 `external`。
@@ -188,6 +219,7 @@ ls -l /etc/enterprise-ai-platform
 grep -v 'PASSWORD\|PASS=' /etc/enterprise-ai-platform/database.env
 grep -v 'PASSWORD\|PASS=\|SECRET=' /etc/enterprise-ai-platform/platform.env
 grep -E '^(DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|QWEN_BASE_URL|QWEN_MODEL|DIFY_ENABLED|DIFY_BASE_URL|DIFY_DATASET_ID|DIFY_TOP_K|DIFY_SCORE_THRESHOLD|DIFY_REQUEST_TIMEOUT_SECONDS|DIFY_MAX_CONTEXT_CHARS|LLM_)' /etc/enterprise-ai-platform/llm.env
+grep -E '^(AGENT_|DB2_ENABLED|DB2_CATALOG_FILE|DB2_QUERY_TIMEOUT_SECONDS|DB2_MAX_ROWS|REPORT_FILES_ENABLED|NOTIFICATION_ENABLED|NOTIFICATION_AUTO_SEND)' /etc/enterprise-ai-platform/agent.env
 cat /etc/enterprise-ai-platform/deploy.env
 ```
 

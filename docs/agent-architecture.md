@@ -1,0 +1,132 @@
+# LangGraph 生产分析 Agent 架构
+
+## 1. 第一阶段目标
+
+保留现有 React、Nginx、NestJS、RabbitMQ、Worker 和 NDJSON 流式协议，只把
+FastAPI 内部从固定问答流水线升级为受控 LangGraph Agent。第一阶段支持：
+
+1. 生产问题分析：根据 Dify 知识、批准的 DB2 查询和多轮对话形成原因分析。
+2. 报表生成：生成 Markdown 报告、证据 JSON 和每个 DB2 查询的 CSV，保存到 MinIO。
+
+DB2 未配置时 Agent 仍可使用 Dify 和大模型，但必须明确说明缺少生产数据，不能
+虚构查询结果。通知 Tool 默认关闭，确定渠道和审批规则后才能启用。
+
+## 2. 数据流程
+
+```text
+React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI /process
+                                                |
+                                                v
+                                      LangGraph Supervisor
+                                        /              \
+                           Incident Planner       Report Planner
+                                      \              /
+                                       Dify Knowledge Tool
+                                                |
+                                       DB2 Approved Query Tool
+                                                |
+                                      Evidence Context Builder
+                                                |
+                                      DeepSeek / Qwen Stream
+                                                |
+                             Report Tool -> File Tool -> MinIO
+                                                |
+                              Notification Tool (default disabled)
+```
+
+Supervisor 当前使用稳定关键词分流；两个 Planner 使用选定的大模型生成结构化计划。
+后续可以继续增加设备、批次、质量、接口、库存等领域 Planner，而不改变外围协议。
+
+## 3. 安全边界
+
+- 模型不能提交任意 SQL，只能选择 `db2-catalog.json` 中批准的 `query_id`。
+- SQL 必须以 `SELECT` 或 `WITH` 开头，并拒绝写入、DDL、CALL 和多语句。
+- 所有参数都使用 DB2 参数绑定，不进行字符串拼接。
+- DB2 账号必须由 DBA 配置为只读，并限制可访问 Schema、表和视图。
+- 单次 Agent 查询数量、单条查询超时和返回行数均有限制。
+- 日志只记录任务 ID、查询 ID、行数和耗时，不记录 SQL、参数值、数据正文和密钥。
+- Dify 文本和 DB2 数据都被视为不可信证据，不能覆盖系统指令。
+- 通知同时要求用户明确提出、服务已启用、自动发送已启用，三项缺一不可。
+- DB2 DSN、Webhook 和 Dify/LLM Key 只在虚拟机 `/etc/enterprise-ai-platform/`。
+
+## 4. 外部配置文件
+
+### 4.1 Agent 与 DB2 密钥
+
+真实文件：`/etc/enterprise-ai-platform/agent.env`，权限必须为 `600`。
+
+```ini
+AGENT_ENABLED=true
+AGENT_MAX_QUERIES=6
+AGENT_MAX_EVIDENCE_CHARS=24000
+
+DB2_ENABLED=false
+DB2_DSN=DATABASE=...;HOSTNAME=...;PORT=50000;PROTOCOL=TCPIP;UID=...;PWD=...;
+DB2_CATALOG_FILE=/etc/enterprise-ai-platform/db2-catalog.json
+DB2_QUERY_TIMEOUT_SECONDS=30
+DB2_MAX_ROWS=500
+
+REPORT_FILES_ENABLED=true
+NOTIFICATION_ENABLED=false
+NOTIFICATION_AUTO_SEND=false
+NOTIFICATION_WEBHOOK_URL=...
+NOTIFICATION_TIMEOUT_SECONDS=10
+```
+
+模板：`deploy/agent.env.example`。模板只能包含占位符，不能填写真实值。
+
+### 4.2 DB2 业务与查询目录
+
+真实文件：`/etc/enterprise-ai-platform/db2-catalog.json`，模板见
+`deploy/db2-catalog.example.json`。这个目录可以包含表和列名称，但生产环境建议仍
+放在仓库外，由业务负责人和 DBA 共同审核。
+
+每条查询至少需要：
+
+- 稳定且唯一的查询 ID；
+- 查询用途和返回口径；
+- 只读、参数化 SQL；
+- 参数名称、类型、格式和是否必填；
+- 返回列说明；
+- 最大返回行数。
+
+## 5. 启用 DB2 前必须提供的资料
+
+### P0：缺少就不能安全查询
+
+1. DB2 类型与版本：LUW、z/OS 或 IBM i，以及具体版本。
+2. 主机、端口、数据库名、协议、只读用户名和密码。
+3. 是否启用 TLS；若启用，需要 CA/服务器证书、SNI/主机名要求。
+4. FastAPI 容器到 DB2 的网络和防火墙验证结果。
+5. 允许访问的 Schema、表、视图白名单。
+6. 表清单、主键、关联键、时间字段和数据保留周期。
+7. 每个字段的业务含义、类型、单位、枚举值、空值含义和是否敏感。
+8. 至少一批由 DBA 审核的参数化查询及其预期结果样例。
+
+### P1：缺少会显著降低原因分析准确率
+
+1. 生产业务流程和系统/设备拓扑。
+2. 故障、告警、状态、结果码的字典。
+3. 批次、工单、设备、产品、时间之间的关联规则。
+4. 正常范围、阈值、SLA、统计口径和时区。
+5. 典型正常案例、典型故障案例及最终根因。
+6. 同一个指标在不同表中的权威来源和延迟。
+7. 报表样例、栏目、排序、分组、图表和文件格式要求。
+
+### P2：启用通知前提供
+
+1. 渠道：企业微信、钉钉、邮件、Teams、Slack 或内部接口。
+2. Webhook/SMTP/API 认证方式。
+3. 收件人和环境映射。
+4. 哪些严重级别允许自动通知，哪些必须人工批准。
+5. 重试、去重、静默时间和升级规则。
+
+## 6. 当前限制与后续阶段
+
+- 报告已经保存 MinIO，但前端下载链接需要新增 NestJS 鉴权下载接口。
+- 第一阶段生成 Markdown/JSON/CSV；PDF、Excel 图表需确定模板后增加渲染器。
+- 当前任务恢复仍依赖 RabbitMQ/Worker；生产级断点恢复应增加 LangGraph PostgreSQL
+  Checkpointer 和人工审批节点。
+- 当前查询按 Planner 顺序执行；取得真实业务目录后，可以使用 LangGraph `Send`
+  增加受控并行取证和多个领域 Planner。
+- Qdrant 中现有 8 维向量是占位实现，不参与 Agent 知识检索。

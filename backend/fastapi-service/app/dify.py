@@ -14,7 +14,6 @@ import httpx
 
 from app.config.settings import Settings, get_settings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -74,13 +73,15 @@ def _format_records(records: object, settings: Settings) -> tuple[str, int]:
         if not isinstance(segment, dict):
             continue
         content = str(segment.get("content") or "").strip()
-        question = str(segment.get("question") or "").strip()
+        # Dify 的 Q&A 分段通常把问题放在 content、答案放在 answer；
+        # 部分版本会额外返回 question，因此优先使用 question 并兼容 content。
+        question = str(segment.get("question") or content).strip()
         answer = str(segment.get("answer") or "").strip()
 
         if answer:
             content = f"问题：{question}\n答案：{answer}"
-        else:
-            content = question
+        elif not content:
+            continue
         document = segment.get("document")
         source = (
             str(document.get("name") or "未知文档")

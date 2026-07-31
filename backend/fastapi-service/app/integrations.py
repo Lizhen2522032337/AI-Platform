@@ -11,7 +11,6 @@ from qdrant_client import QdrantClient, models
 
 from app.config.settings import get_settings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +32,34 @@ def minio_client() -> Minio:
         secret_key=settings.minio_root_password,
         secure=settings.minio_use_ssl,
     )
+
+
+def save_file(object_key: str, payload: bytes, content_type: str) -> dict[str, object]:
+    """文件生成 Tool 的底层存储函数；只返回对象定位信息，不生成公开 URL。"""
+
+    settings = get_settings()
+    storage = minio_client()
+    if not storage.bucket_exists(settings.minio_bucket):
+        logger.info("creating MinIO bucket: bucket=%s", settings.minio_bucket)
+        storage.make_bucket(settings.minio_bucket)
+    storage.put_object(
+        settings.minio_bucket,
+        object_key,
+        io.BytesIO(payload),
+        length=len(payload),
+        content_type=content_type,
+    )
+    logger.info(
+        "MinIO generated file saved: bucket=%s object_key=%s bytes=%d",
+        settings.minio_bucket,
+        object_key,
+        len(payload),
+    )
+    return {
+        "objectKey": object_key,
+        "contentType": content_type,
+        "size": len(payload),
+    }
 
 
 def check_integrations() -> None:
@@ -60,6 +87,8 @@ def save_result(
     provider: str,
     model: str,
     usage: dict[str, object] | None = None,
+    artifacts: list[dict[str, object]] | None = None,
+    agent_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """保存完整回答，将检索向量写入 Qdrant、结果 JSON 写入 MinIO。"""
 
@@ -108,19 +137,11 @@ def save_result(
         "usage": usage or {},
         "vectorId": vector_id,
         "objectKey": object_key,
+        "artifacts": artifacts or [],
+        "agent": agent_metadata or {},
     }
     payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
-    storage = minio_client()
-    if not storage.bucket_exists(settings.minio_bucket):
-        logger.info("creating MinIO bucket: bucket=%s", settings.minio_bucket)
-        storage.make_bucket(settings.minio_bucket)
-    storage.put_object(
-        settings.minio_bucket,
-        object_key,
-        io.BytesIO(payload),
-        length=len(payload),
-        content_type="application/json",
-    )
+    save_file(object_key, payload, "application/json")
     logger.info(
         "MinIO result saved: task_id=%s bucket=%s object_key=%s bytes=%d",
         task_id,
@@ -150,11 +171,15 @@ def delete_results(tasks: list[tuple[int, str | None]]) -> None:
     storage = minio_client()
     if storage.bucket_exists(settings.minio_bucket):
         deleted_objects = 0
-        for _, object_key in tasks:
-            if not object_key:
-                continue
-            storage.remove_object(settings.minio_bucket, object_key)
-            deleted_objects += 1
+        for task_id, _ in tasks:
+            # 报告、CSV、证据清单和主结果都位于同一任务前缀，删除会话时一起清理。
+            for item in storage.list_objects(
+                settings.minio_bucket,
+                prefix=f"tasks/{task_id}/",
+                recursive=True,
+            ):
+                storage.remove_object(settings.minio_bucket, item.object_name)
+                deleted_objects += 1
         logger.info(
             "MinIO results deleted: bucket=%s objects=%d",
             settings.minio_bucket,

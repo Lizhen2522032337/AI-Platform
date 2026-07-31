@@ -48,6 +48,25 @@ def test_format_records_filters_score_and_limits_top_k() -> None:
     assert "低分知识" not in context
 
 
+def test_format_records_keeps_dify_qa_question_and_answer() -> None:
+    context, hits = _format_records(
+        [
+            {
+                "score": 0.93,
+                "segment": {
+                    "content": "生产线为什么停机？",
+                    "answer": "当状态码为 E17 时，应检查上游压力。",
+                    "document": {"name": "故障手册.txt"},
+                },
+            }
+        ],
+        settings(dify_score_threshold=0.5),
+    )
+    assert hits == 1
+    assert "问题：生产线为什么停机？" in context
+    assert "答案：当状态码为 E17 时，应检查上游压力。" in context
+
+
 def test_retrieve_returns_empty_context_when_disabled() -> None:
     result = asyncio.run(retrieve_knowledge("什么是软件设计师考试？", settings()))
     assert result.enabled is False
