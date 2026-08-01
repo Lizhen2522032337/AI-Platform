@@ -89,6 +89,7 @@ def save_result(
     usage: dict[str, object] | None = None,
     artifacts: list[dict[str, object]] | None = None,
     agent_metadata: dict[str, object] | None = None,
+    execution_trace: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """保存完整回答，将检索向量写入 Qdrant、结果 JSON 写入 MinIO。"""
 
@@ -139,6 +140,8 @@ def save_result(
         "objectKey": object_key,
         "artifacts": artifacts or [],
         "agent": agent_metadata or {},
+        # 仅保存脱敏执行摘要；前端刷新后仍可审计本次工具和阶段。
+        "executionTrace": execution_trace or [],
     }
     payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
     save_file(object_key, payload, "application/json")

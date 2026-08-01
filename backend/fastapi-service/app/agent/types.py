@@ -1,5 +1,6 @@
 """Agent 状态、Planner 输出以及通用数据库查询目录的数据结构。"""
 
+from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
@@ -44,3 +45,5 @@ class AgentState(TypedDict, total=False):
     knowledge_hits: int
     observations: list[dict[str, Any]]
     agent_context: str
+    # 回调只传递经过脱敏的执行摘要，供前台实时展示，不承载提示词、SQL 或数据正文。
+    trace_callback: Callable[[dict[str, object]], None]

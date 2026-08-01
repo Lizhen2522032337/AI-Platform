@@ -12,6 +12,7 @@ import { authApi } from './api/auth'
 import { conversationsApi } from './api/conversations'
 import { tasksApi } from './api/tasks'
 import { AdminUsersPanel } from './components/AdminUsersPanel'
+import { ExecutionTrace } from './components/ExecutionTrace'
 import { LoginScreen } from './components/LoginScreen'
 import type { AuthUser } from './types/auth'
 import type { ChatConversation } from './types/conversation'
@@ -106,10 +107,14 @@ function App() {
         turns: detail.tasks.length,
       })
       setTasks((current) =>
-        detail.tasks.map((task) => ({
-          ...task,
-          partialText: current.find((item) => item.id === task.id)?.partialText,
-        })),
+        detail.tasks.map((task) => {
+          const liveTask = current.find((item) => item.id === task.id)
+          return {
+            ...task,
+            partialText: liveTask?.partialText,
+            executionTrace: liveTask?.executionTrace ?? task.result?.executionTrace,
+          }
+        }),
       )
       setModelProvider(detail.conversation.modelProvider)
       setDatabaseType(detail.conversation.databaseType ?? 'postgresql')
@@ -159,6 +164,9 @@ function App() {
                 result: update.result ?? task.result,
                 answer: update.result?.text ?? task.answer,
                 errorMessage: update.errorMessage ?? task.errorMessage,
+                executionTrace: update.executionTrace
+                  ?? update.result?.executionTrace
+                  ?? task.executionTrace,
               }
             : task,
         ),
@@ -437,10 +445,16 @@ function App() {
                         <div className="message-avatar assistant-avatar">EA</div>
                         <div className="message-content">
                           <div className="message-meta">Enterprise AI <span>{modelLabel(task.modelProvider)} · {databaseLabel(task.databaseType ?? 'postgresql')}{task.modelName ? ` · ${task.modelName}` : ''}</span></div>
-                          <div className="message-text assistant-text">
-                            {answer || (task.status === 'failed' ? '本次回答失败。' : '正在思考…')}
-                            {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
-                          </div>
+                          <ExecutionTrace
+                            status={task.status}
+                            steps={task.executionTrace ?? task.result?.executionTrace ?? []}
+                          />
+                          {(answer || task.status === 'failed' || task.status === 'processing') && (
+                            <div className="message-text assistant-text">
+                              {answer || (task.status === 'failed' ? '本次回答失败。' : '正在生成回答…')}
+                              {task.status === 'processing' && <span className="stream-cursor" aria-hidden="true" />}
+                            </div>
+                          )}
                           {task.errorMessage && <div className="message-error">{task.errorMessage}</div>}
                         </div>
                       </div>

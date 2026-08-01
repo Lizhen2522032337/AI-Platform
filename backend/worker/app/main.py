@@ -14,13 +14,35 @@ import pika
 import psycopg
 import redis
 
-
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
 worker_ready = False
+
+
+class TaskExecutionError(RuntimeError):
+    """携带已完成执行轨迹的任务错误，便于失败后继续审计。"""
+
+    def __init__(self, message: str, execution_trace: list[dict[str, Any]]):
+        super().__init__(message)
+        self.execution_trace = execution_trace
+
+
+def merge_trace_step(
+    trace: list[dict[str, Any]], step: dict[str, Any]
+) -> None:
+    """按步骤 ID 合并运行中和最终状态。"""
+
+    step_id = str(step.get("id") or "")
+    if not step_id:
+        return
+    for index, current in enumerate(trace):
+        if current.get("id") == step_id:
+            trace[index] = {**current, **step}
+            return
+    trace.append(dict(step))
 
 
 def required(name: str) -> str:
@@ -227,6 +249,15 @@ def process_message(body: bytes) -> None:
         database_type,
         len(prompt),
     )
+    execution_trace: list[dict[str, Any]] = [
+        {
+            "id": "worker_started",
+            "title": "任务进入异步执行器",
+            "status": "completed",
+            "kind": "stage",
+            "detail": "Worker 已从 RabbitMQ 接收任务",
+        }
+    ]
     processing_state = {
         "id": task_id,
         "ownerId": owner_id,
@@ -235,6 +266,7 @@ def process_message(body: bytes) -> None:
         "databaseType": database_type,
         "partialText": "",
         "conversationId": conversation_id,
+        "executionTrace": execution_trace,
     }
     update_task(task_id, "processing")
     save_state(task_id, processing_state)
@@ -243,49 +275,98 @@ def process_message(body: bytes) -> None:
     model_name: str | None = None
     result: dict[str, Any] | None = None
     last_publish = 0.0
+    context_started = time.monotonic()
     messages = load_conversation_messages(conversation_id, task_id, prompt)
-    for event in stream_ai_service(
-        task_id, prompt, model_provider, database_type, messages
-    ):
-        event_type = event.get("type")
-        if event_type == "start":
-            model_name = str(event.get("model") or "") or None
-            logger.info(
-                "AI generation started: task_id=%s model=%s",
-                task_id,
-                model_name or "unknown",
-            )
-        elif event_type == "delta":
-            text = str(event.get("text") or "")
-            if not text:
-                continue
-            answer_parts.append(text)
-            now = time.monotonic()
-            # 合并高频 token，最多每 100ms 写一次 Redis，兼顾流畅度和中间件压力。
-            if now - last_publish >= 0.1:
+    history_turns = max(0, (len(messages) - 1) // 2)
+    merge_trace_step(
+        execution_trace,
+        {
+            "id": "conversation_context",
+            "title": "加载会话上下文",
+            "status": "completed",
+            "kind": "stage",
+            "detail": f"已加载最近 {history_turns} 轮历史对话",
+            "durationMs": round((time.monotonic() - context_started) * 1000),
+        },
+    )
+    save_state(task_id, processing_state)
+    try:
+        for event in stream_ai_service(
+            task_id, prompt, model_provider, database_type, messages
+        ):
+            event_type = event.get("type")
+            if event_type == "trace":
+                step = event.get("step")
+                if not isinstance(step, dict):
+                    raise RuntimeError("AI 服务返回了无效执行轨迹")
+                merge_trace_step(execution_trace, step)
                 save_state(
                     task_id,
                     {
                         **processing_state,
                         "modelName": model_name,
                         "partialText": "".join(answer_parts),
+                        "executionTrace": execution_trace,
                     },
                 )
-                last_publish = now
-        elif event_type == "complete":
-            candidate = event.get("result")
-            if not isinstance(candidate, dict):
-                raise RuntimeError("AI 服务没有返回有效结果")
-            result = candidate
-            model_name = str(result.get("model") or model_name or "") or None
-        elif event_type == "error":
-            raise RuntimeError(str(event.get("message") or "AI 服务处理失败"))
+            elif event_type == "start":
+                model_name = str(event.get("model") or "") or None
+                logger.info(
+                    "AI generation started: task_id=%s model=%s",
+                    task_id,
+                    model_name or "unknown",
+                )
+            elif event_type == "delta":
+                text = str(event.get("text") or "")
+                if not text:
+                    continue
+                answer_parts.append(text)
+                now = time.monotonic()
+                # 合并高频 token，最多每 100ms 写一次 Redis，兼顾流畅度和中间件压力。
+                if now - last_publish >= 0.1:
+                    save_state(
+                        task_id,
+                        {
+                            **processing_state,
+                            "modelName": model_name,
+                            "partialText": "".join(answer_parts),
+                            "executionTrace": execution_trace,
+                        },
+                    )
+                    last_publish = now
+            elif event_type == "complete":
+                candidate = event.get("result")
+                if not isinstance(candidate, dict):
+                    raise RuntimeError("AI 服务没有返回有效结果")
+                result = candidate
+                model_name = str(result.get("model") or model_name or "") or None
+            elif event_type == "error":
+                raise TaskExecutionError(
+                    str(event.get("message") or "AI 服务处理失败"),
+                    execution_trace,
+                )
+    except TaskExecutionError:
+        raise
+    except Exception as error:
+        merge_trace_step(
+            execution_trace,
+            {
+                "id": "execution_error",
+                "title": "执行任务",
+                "status": "failed",
+                "kind": "stage",
+                "detail": "AI 服务连接或事件处理失败",
+            },
+        )
+        raise TaskExecutionError(str(error), execution_trace) from error
 
     if result is None:
-        raise RuntimeError("AI 服务流意外结束")
+        raise TaskExecutionError("AI 服务流意外结束", execution_trace)
     answer = str(result.get("text") or "".join(answer_parts)).strip()
     if not answer:
-        raise RuntimeError("AI 服务没有返回回答")
+        raise TaskExecutionError("AI 服务没有返回回答", execution_trace)
+    # Worker 的上下文阶段也属于完整轨迹，以 Worker 汇总结果覆盖 FastAPI 子集。
+    result["executionTrace"] = execution_trace
     update_task(
         task_id,
         "completed",
@@ -304,6 +385,7 @@ def process_message(body: bytes) -> None:
             "modelName": model_name,
             "conversationId": conversation_id,
             "result": result,
+            "executionTrace": execution_trace,
         },
     )
     logger.info("task completed: %s", task_id)
@@ -312,7 +394,7 @@ def process_message(body: bytes) -> None:
 class HealthHandler(BaseHTTPRequestHandler):
     """为 Docker 提供极简健康检查。"""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path != "/health":
             self.send_response(404)
             self.end_headers()
@@ -389,12 +471,28 @@ def consume() -> None:
             database_type = str(decoded.get("databaseType") or "postgresql")
             process_message(body)
             current_channel.basic_ack(delivery_tag=method.delivery_tag)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             logger.exception("task failed")
             try:
                 if task_id is not None and owner_id is not None:
                     message = str(error)[:2000]
-                    update_task(task_id, "failed", error_message=message)
+                    execution_trace = getattr(error, "execution_trace", [])
+                    if not execution_trace:
+                        execution_trace = [
+                            {
+                                "id": "execution_error",
+                                "title": "执行任务",
+                                "status": "failed",
+                                "kind": "stage",
+                                "detail": "任务执行失败",
+                            }
+                        ]
+                    update_task(
+                        task_id,
+                        "failed",
+                        result={"executionTrace": execution_trace},
+                        error_message=message,
+                    )
                     save_state(
                         task_id,
                         {
@@ -405,10 +503,11 @@ def consume() -> None:
                             "modelProvider": model_provider,
                             "databaseType": database_type,
                             "errorMessage": message,
+                            "executionTrace": execution_trace,
                         },
                     )
                 current_channel.basic_ack(delivery_tag=method.delivery_tag)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("failed to persist error; task will be requeued")
                 current_channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
@@ -429,7 +528,7 @@ def main() -> None:
             consume()
         except KeyboardInterrupt:
             return
-        except Exception:  # noqa: BLE001
+        except Exception:
             worker_ready = False
             logger.exception("worker connection failed; retrying in 5 seconds")
             time.sleep(5)

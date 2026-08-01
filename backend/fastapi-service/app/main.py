@@ -1,8 +1,10 @@
 """FastAPI AI 服务入口。"""
 
+import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from typing import Literal
 
@@ -90,6 +92,21 @@ def ndjson(event: dict[str, object]) -> bytes:
     return (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def merge_trace_step(
+    trace: list[dict[str, object]], step: dict[str, object]
+) -> None:
+    """按稳定步骤 ID 更新轨迹，避免 running/completed 在前台重复出现。"""
+
+    step_id = str(step.get("id") or "")
+    if not step_id:
+        return
+    for index, current in enumerate(trace):
+        if current.get("id") == step_id:
+            trace[index] = {**current, **step}
+            return
+    trace.append(dict(step))
+
+
 async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
     """运行 LangGraph Agent，再流式生成回答并持久化报告产物。"""
 
@@ -97,6 +114,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
     usage: dict[str, object] | None = None
     model = ""
     preparation: AgentPreparation | None = None
+    execution_trace: list[dict[str, object]] = []
     logger.info(
         "AI task accepted: task_id=%s provider=%s database=%s history_messages=%d prompt_chars=%d",
         payload.task_id,
@@ -112,13 +130,26 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         ]
         settings = get_settings()
         if settings.agent_enabled:
-            preparation = await prepare_agent(
-                payload.task_id,
-                payload.prompt,
-                payload.model_provider,
-                history,
-                payload.database_type,
+            # Agent 图通过队列上报安全摘要；图本身仍在同一请求内按原有顺序执行。
+            trace_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            agent_task = asyncio.create_task(
+                prepare_agent(
+                    payload.task_id,
+                    payload.prompt,
+                    payload.model_provider,
+                    history,
+                    payload.database_type,
+                    trace_queue.put_nowait,
+                )
             )
+            while not agent_task.done() or not trace_queue.empty():
+                try:
+                    step = await asyncio.wait_for(trace_queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                merge_trace_step(execution_trace, step)
+                yield ndjson({"type": "trace", "step": step})
+            preparation = await agent_task
             evidence_context = preparation.context
             logger.info(
                 "Agent evidence ready: task_id=%s intent=%s queries=%d",
@@ -128,10 +159,44 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             )
         else:
             # 保留紧急回退开关：关闭 Agent 时仍使用原来的 Dify → LLM 流程。
+            retrieval_started = time.perf_counter()
+            retrieval_step: dict[str, object] = {
+                "id": "dify_knowledge",
+                "title": "检索企业知识库",
+                "status": "running",
+                "kind": "tool",
+                "toolName": "dify_knowledge",
+            }
+            merge_trace_step(execution_trace, retrieval_step)
+            yield ndjson({"type": "trace", "step": retrieval_step})
             knowledge = await retrieve_knowledge(payload.prompt)
             evidence_context = knowledge.context
             if knowledge.enabled and not evidence_context:
                 evidence_context = "[知识库检索结果]\n本次问题未检索到相关知识块。"
+            retrieval_step = {
+                **retrieval_step,
+                "status": "completed" if knowledge.enabled else "skipped",
+                "detail": (
+                    f"已取得 {knowledge.hit_count} 个相关知识块"
+                    if knowledge.enabled
+                    else "Dify Knowledge 当前未启用"
+                ),
+                "durationMs": round((time.perf_counter() - retrieval_started) * 1000),
+            }
+            merge_trace_step(execution_trace, retrieval_step)
+            yield ndjson({"type": "trace", "step": retrieval_step})
+
+        generation_started = time.perf_counter()
+        generation_step: dict[str, object] = {
+            "id": "model_generation",
+            "title": "生成最终回答",
+            "status": "running",
+            "kind": "tool",
+            "toolName": payload.model_provider,
+            "detail": f"正在调用 {payload.model_provider}",
+        }
+        merge_trace_step(execution_trace, generation_step)
+        yield ndjson({"type": "trace", "step": generation_step})
         async for event in stream_chat(
             payload.model_provider,
             history,
@@ -139,6 +204,12 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         ):
             if event["type"] == "start":
                 model = str(event["model"])
+                generation_step = {
+                    **generation_step,
+                    "detail": f"模型：{model}",
+                }
+                merge_trace_step(execution_trace, generation_step)
+                yield ndjson({"type": "trace", "step": generation_step})
             elif event["type"] == "delta":
                 answer_parts.append(str(event["text"]))
             elif event["type"] == "usage":
@@ -148,16 +219,52 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         answer = "".join(answer_parts).strip()
         if not answer:
             raise LlmProviderError("大模型没有返回有效回答")
+        generation_step = {
+            **generation_step,
+            "status": "completed",
+            "detail": f"模型：{model or payload.model_provider}，生成 {len(answer)} 个字符",
+            "durationMs": round((time.perf_counter() - generation_started) * 1000),
+        }
+        merge_trace_step(execution_trace, generation_step)
+        yield ndjson({"type": "trace", "step": generation_step})
         artifacts: list[dict[str, object]] = []
         if preparation is not None and preparation.plan.report_required:
+            report_started = time.perf_counter()
+            report_step: dict[str, object] = {
+                "id": "report_files",
+                "title": "生成报告文件",
+                "status": "running",
+                "kind": "tool",
+                "toolName": "report_files",
+            }
+            merge_trace_step(execution_trace, report_step)
+            yield ndjson({"type": "trace", "step": report_step})
             artifacts = create_report_files(
                 payload.task_id,
                 preparation.plan.report_title,
                 answer,
                 preparation.observations,
             )
+            report_step = {
+                **report_step,
+                "status": "completed",
+                "detail": f"已生成 {len(artifacts)} 个报告文件",
+                "durationMs": round((time.perf_counter() - report_started) * 1000),
+            }
+            merge_trace_step(execution_trace, report_step)
+            yield ndjson({"type": "trace", "step": report_step})
         notification_sent = False
         if preparation is not None and preparation.plan.notify:
+            notification_started = time.perf_counter()
+            notification_step: dict[str, object] = {
+                "id": "notification",
+                "title": "发送分析通知",
+                "status": "running",
+                "kind": "tool",
+                "toolName": "notification",
+            }
+            merge_trace_step(execution_trace, notification_step)
+            yield ndjson({"type": "trace", "step": notification_step})
             try:
                 notification_sent = await send_notification(
                     payload.task_id,
@@ -165,6 +272,14 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                     answer,
                     artifacts,
                 )
+                notification_step = {
+                    **notification_step,
+                    "status": "completed" if notification_sent else "skipped",
+                    "detail": "通知已发送" if notification_sent else "通知策略未允许自动发送",
+                    "durationMs": round(
+                        (time.perf_counter() - notification_started) * 1000
+                    ),
+                }
             except NotificationToolError as error:
                 # 通知不是分析结果的事务边界；失败会记录，但不丢弃已经完成的报告。
                 logger.warning(
@@ -172,6 +287,16 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                     payload.task_id,
                     error,
                 )
+                notification_step = {
+                    **notification_step,
+                    "status": "failed",
+                    "detail": str(error),
+                    "durationMs": round(
+                        (time.perf_counter() - notification_started) * 1000
+                    ),
+                }
+            merge_trace_step(execution_trace, notification_step)
+            yield ndjson({"type": "trace", "step": notification_step})
         result = save_result(
             payload.task_id,
             payload.prompt,
@@ -187,6 +312,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 "reportRequired": preparation.plan.report_required if preparation else False,
                 "notificationSent": notification_sent,
             },
+            execution_trace,
         )
         logger.info(
             "AI task completed: task_id=%s provider=%s model=%s answer_chars=%d",
@@ -203,6 +329,15 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             payload.model_provider,
             error,
         )
+        failure_step = {
+            "id": "execution_error",
+            "title": "执行任务",
+            "status": "failed",
+            "kind": "stage",
+            "detail": str(error),
+        }
+        merge_trace_step(execution_trace, failure_step)
+        yield ndjson({"type": "trace", "step": failure_step})
         yield ndjson({"type": "error", "message": str(error)})
     except Exception:
         # 仅给 Worker 返回稳定错误，不泄露堆栈、Key 或供应商响应。
@@ -211,6 +346,15 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             payload.task_id,
             payload.model_provider,
         )
+        failure_step = {
+            "id": "execution_error",
+            "title": "执行任务",
+            "status": "failed",
+            "kind": "stage",
+            "detail": "执行过程中发生未预期错误",
+        }
+        merge_trace_step(execution_trace, failure_step)
+        yield ndjson({"type": "trace", "step": failure_step})
         yield ndjson({"type": "error", "message": "AI 服务处理失败"})
 
 

@@ -3,7 +3,6 @@
 import asyncio
 
 import pytest
-
 from app.agent import graph
 from app.agent.catalog import CatalogQuery, QueryCatalog
 from app.agent.database_tool import _prepare_sql
@@ -74,6 +73,7 @@ def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
 
 
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
+    trace_steps = []
     async def fake_create_plan(
         intent, prompt, provider, messages, catalog, database_type
     ):
@@ -102,11 +102,14 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
             "生成今天的生产日报",
             "qwen",
             [{"role": "user", "content": "生成今天的生产日报"}],
+            trace_callback=trace_steps.append,
         )
     )
     assert prepared.intent == "report_generation"
     assert prepared.plan.report_required is True
     assert "日报口径" in prepared.context
+    assert any(step["id"] == "dify_knowledge" for step in trace_steps)
+    assert all("日报口径" not in str(step) for step in trace_steps)
 
 
 def test_catalog_query_model_allows_parameterized_select() -> None:

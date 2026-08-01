@@ -3,11 +3,10 @@
 import json
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
 from app import main
 from app.agent.graph import AgentPreparation
 from app.agent.types import AgentPlan
+from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
 
@@ -26,10 +25,20 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
-    async def fake_prepare(task_id, prompt, provider, messages, database_type):
+    async def fake_prepare(
+        task_id, prompt, provider, messages, database_type, trace_callback
+    ):
         assert (task_id, prompt, provider) == (7, "测试任务", "qwen")
         assert database_type == "postgresql"
         assert messages[-1] == {"role": "user", "content": "测试任务"}
+        trace_callback(
+            {
+                "id": "planner",
+                "title": "制定受控执行计划",
+                "status": "completed",
+                "kind": "stage",
+            }
+        )
         return AgentPreparation(
             intent="incident_analysis",
             plan=AgentPlan(
@@ -60,7 +69,7 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "save_result",
-        lambda task_id, _prompt, answer, provider, model, _usage, artifacts, metadata: {
+        lambda task_id, _prompt, answer, provider, model, _usage, artifacts, metadata, execution_trace: {
             "taskId": task_id,
             "text": answer,
             "provider": provider,
@@ -69,6 +78,7 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
             "objectKey": f"tasks/{task_id}/result.json",
             "artifacts": artifacts,
             "agent": metadata,
+            "executionTrace": execution_trace,
         },
     )
     response = client.post(
@@ -86,10 +96,12 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     )
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines()]
-    assert events[1] == {"type": "delta", "text": "处理"}
+    assert any(event.get("step", {}).get("id") == "planner" for event in events)
+    assert {"type": "delta", "text": "处理"} in events
     assert events[-1]["type"] == "complete"
     assert events[-1]["result"]["text"] == "处理完成"
     assert events[-1]["result"]["agent"]["intent"] == "incident_analysis"
+    assert events[-1]["result"]["executionTrace"][-1]["id"] == "model_generation"
 
 
 def test_process_rejects_blank_prompt() -> None:

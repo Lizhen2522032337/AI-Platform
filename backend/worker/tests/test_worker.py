@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from app import main
 
 
@@ -60,6 +61,15 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
         "stream_ai_service",
         lambda task_id, _prompt, provider, database_type, messages: iter(
             [
+                {
+                    "type": "trace",
+                    "step": {
+                        "id": "planner",
+                        "title": "制定执行计划",
+                        "status": "completed",
+                        "kind": "stage",
+                    },
+                },
                 {"type": "start", "provider": provider, "model": "test-model"},
                 {"type": "delta", "text": "完"},
                 {"type": "delta", "text": "成"},
@@ -98,5 +108,58 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
     assert redis_updates[0]["databaseType"] == "postgresql"
     assert redis_updates[0]["conversationId"] == 5
     assert any(state.get("partialText") for state in redis_updates)
+    assert any(
+        step.get("id") == "planner"
+        for state in redis_updates
+        for step in state.get("executionTrace", [])
+    )
     assert redis_updates[-1]["status"] == "completed"
     assert redis_updates[-1]["ownerId"] == 3
+
+
+def test_process_message_keeps_trace_when_ai_service_fails(monkeypatch) -> None:
+    """失败异常必须携带已完成轨迹，供外层回调写入 PostgreSQL 和 Redis。"""
+
+    monkeypatch.setattr(main, "update_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "save_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        main,
+        "load_conversation_messages",
+        lambda _conversation_id, _task_id, prompt: [{"role": "user", "content": prompt}],
+    )
+    monkeypatch.setattr(
+        main,
+        "stream_ai_service",
+        lambda *_args, **_kwargs: iter(
+            [
+                {
+                    "type": "trace",
+                    "step": {
+                        "id": "dify_knowledge",
+                        "title": "检索企业知识库",
+                        "status": "failed",
+                        "kind": "tool",
+                    },
+                },
+                {"type": "error", "message": "知识服务不可用"},
+            ]
+        ),
+    )
+
+    with pytest.raises(main.TaskExecutionError) as captured:
+        main.process_message(
+            json.dumps(
+                {
+                    "id": 10,
+                    "ownerId": 3,
+                    "prompt": "测试失败",
+                    "modelProvider": "deepseek",
+                    "databaseType": "postgresql",
+                }
+            ).encode()
+        )
+
+    assert any(
+        step["id"] == "dify_knowledge"
+        for step in captured.value.execution_trace
+    )
