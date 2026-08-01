@@ -166,6 +166,7 @@ Authorization: Bearer {DIFY_API_KEY}
 响应媒体类型为 `application/x-ndjson`，每行一个事件：
 
 ```text
+{"type":"trace","step":{"id":"dynamic_sql_access","title":"检查动态数据库查询权限","status":"completed","kind":"tool","toolName":"dynamic_sql","detail":"管理员动态 SQL 查询已授权，并将继续执行 AST 白名单校验"}}
 {"type":"trace","step":{"id":"planner","title":"制定受控执行计划","status":"completed","kind":"stage","detail":"计划输出分析结论，选择 2 个批准查询","durationMs":842}}
 {"type":"trace","step":{"id":"dify_knowledge","title":"检索企业知识库","status":"running","kind":"tool","toolName":"dify_knowledge"}}
 {"type":"start","provider":"deepseek","model":"deepseek-v4-flash"}
@@ -175,7 +176,7 @@ Authorization: Bearer {DIFY_API_KEY}
 {"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。
+`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，并跳过无关的 Dify 知识检索。
 
 FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务会把 Markdown、证据 JSON 和数据库查询 CSV 写入 MinIO；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 

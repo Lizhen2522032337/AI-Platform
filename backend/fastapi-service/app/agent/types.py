@@ -6,7 +6,11 @@ from typing import Any, Literal, TypedDict
 from pydantic import BaseModel, Field
 
 Scalar = str | int | float | bool | None
-AgentIntent = Literal["incident_analysis", "report_generation"]
+AgentIntent = Literal[
+    "incident_analysis",
+    "report_generation",
+    "platform_data_query",
+]
 DatabaseType = Literal["postgresql", "db2"]
 
 

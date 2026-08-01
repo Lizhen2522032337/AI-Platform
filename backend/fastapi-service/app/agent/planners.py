@@ -7,19 +7,37 @@ from typing import cast
 from pydantic import ValidationError
 
 from app.agent.catalog import QueryCatalog
-from app.agent.dynamic_sql_tool import planner_schema
-from app.agent.types import AgentIntent, AgentPlan, DatabaseType
+from app.agent.dynamic_sql_tool import (
+    DynamicSqlToolError,
+    planner_schema,
+    validate_dynamic_sql,
+)
+from app.agent.types import AgentIntent, AgentPlan, DatabaseType, DynamicSqlQuery
 from app.config.settings import Settings, get_settings
 from app.llm import LlmProviderError, ModelProvider, complete_json
 
 logger = logging.getLogger(__name__)
 _REPORT_WORDS = ("报表", "报告", "统计", "趋势", "汇总", "导出", "日报", "周报", "月报")
 _NOTIFY_WORDS = ("通知", "发送", "推送", "告警")
+_PLATFORM_USER_WORDS = ("用户", "账号", "账户", "角色", "权限")
+_PLATFORM_QUERY_WORDS = ("整理", "列出", "查询", "查看", "统计", "汇总", "筛选", "多少")
+_DEFAULT_PLATFORM_USERS_SQL = """
+SELECT u.id, u.username, u.display_name, r.code AS role_code,
+       r.name AS role_name, u.is_active, u.last_login_at,
+       u.created_at, u.updated_at
+FROM public.app_users AS u
+JOIN public.auth_roles AS r ON r.id = u.role_id
+ORDER BY u.id
+""".strip()
 
 
 def choose_intent(prompt: str) -> AgentIntent:
     """Supervisor 先做稳定的业务分流，避免每次多调用一次模型。"""
 
+    if any(word in prompt for word in _PLATFORM_USER_WORDS) and any(
+        word in prompt for word in _PLATFORM_QUERY_WORDS
+    ):
+        return "platform_data_query"
     return (
         "report_generation"
         if any(word in prompt for word in _REPORT_WORDS)
@@ -35,6 +53,17 @@ def _history_text(messages: list[dict[str, str]]) -> str:
 
 
 def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
+    if intent == "platform_data_query":
+        return AgentPlan(
+            intent=intent,
+            objective=prompt[:1000],
+            knowledge_query=prompt[:250],
+            hypotheses=[],
+            queries=[],
+            report_required=False,
+            report_title="平台用户查询",
+            notify=False,
+        )
     return AgentPlan(
         intent=intent,
         objective=prompt[:1000],
@@ -77,6 +106,14 @@ dynamic_sql_schema，只能查询 public.app_users/public.auth_roles，必须显
             "只能从 approved_queries 中选择 query_id，绝对不能生成 SQL、命令或虚构查询 ID；"
             "dynamic_query 必须为 null。"
         )
+    if intent == "platform_data_query":
+        return (
+            common
+            + f"\n{dialect}\n{query_rule}\n"
+            + "当前 Planner 专门处理平台用户、账号和角色数据查询。"
+            + "当 dynamic_sql_schema 可用时，必须生成 dynamic_query，不能返回 null；"
+            + "查询只选择回答用户问题所需的非敏感列。"
+        )
     if intent == "report_generation":
         return (
             common
@@ -111,6 +148,7 @@ async def create_plan(
         if allow_dynamic_sql
         and database_type == "postgresql"
         and current.dynamic_sql_enabled
+        and current.postgres_enabled
         else None
     )
     user_prompt = (
@@ -131,7 +169,7 @@ async def create_plan(
             intent,
             type(error).__name__,
         )
-        return _fallback_plan(intent, prompt)
+        plan = _fallback_plan(intent, prompt)
 
     allowed_ids = {
         query.id for query in catalog.queries if query.supports(database_type)
@@ -148,6 +186,21 @@ async def create_plan(
     plan.queries = approved_queries[: max(0, min(current.agent_max_queries, 20))]
     if dynamic_schema is None:
         plan.dynamic_query = None
+    elif intent == "platform_data_query":
+        if plan.dynamic_query is not None:
+            try:
+                validate_dynamic_sql(plan.dynamic_query.sql)
+            except DynamicSqlToolError:
+                logger.warning(
+                    "Platform data planner returned invalid dynamic SQL; safe fallback used"
+                )
+                plan.dynamic_query = None
+        if plan.dynamic_query is None:
+            logger.warning("Platform data planner omitted dynamic SQL; safe fallback used")
+            plan.dynamic_query = DynamicSqlQuery(
+                purpose="查询当前平台用户及其角色和状态",
+                sql=_DEFAULT_PLATFORM_USERS_SQL,
+            )
     if intent == "report_generation":
         plan.report_required = True
     # 通知属于外部副作用：用户请求、服务开关和自动发送开关三者必须同时满足。

@@ -35,8 +35,10 @@ React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI /process
                               Notification Tool (default disabled)
 ```
 
-Supervisor 当前使用稳定关键词分流；两个 Planner 使用选定的大模型生成结构化计划。
+Supervisor 当前使用稳定关键词分流；故障分析、报表生成、平台数据查询三个 Planner 使用选定的大模型生成结构化计划。
 后续可以继续增加设备、批次、质量、接口、库存等领域 Planner，而不改变外围协议。
+
+平台数据查询会识别用户、账号、角色和权限等目标，并直接进入受控数据库节点，不请求无关的 Dify 生产知识。管理员请求在动态表结构可用时必须生成 `dynamic_query`；若模型遗漏查询或生成的 SQL 未通过预校验，Planner 会改用最小安全用户清单查询，执行器仍会再次进行完整 AST 校验。
 
 ## 3. 安全边界
 
@@ -44,6 +46,7 @@ Supervisor 当前使用稳定关键词分流；两个 Planner 使用选定的大
 - 只有服务端确认具有 `users:manage` 权限的管理员，Planner 才能生成一条动态 PostgreSQL 查询；客户端不能自行声明该权限。
 - 动态 SQL 使用 SQL AST 校验，只允许 `SELECT/WITH`、`public.app_users` 与 `public.auth_roles` 的非敏感列；禁止 `SELECT *`、递归 CTE、未批准函数、跨 Schema、系统表、写入、DDL 和多语句。
 - `password_hash`、`username_normalized`、`token_version` 不会提供给 Planner，执行层也会再次拒绝访问。
+- 前台轨迹会显示动态 SQL 权限是否可用、是否生成查询以及执行行数，但不会显示 SQL 正文和数据正文。
 - SQL 必须以 `SELECT` 或 `WITH` 开头，并拒绝写入、DDL、CALL 和多语句。
 - 同一 `query_id` 可配置 `postgresql` 和 `db2` 两套 SQL；Planner 只能看到当前选择方言可用的查询。
 - 所有参数使用 `:参数名`，执行器转换为对应驱动的绑定参数，不进行字符串拼接。

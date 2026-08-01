@@ -81,6 +81,7 @@ def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
 
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
     trace_steps = []
+
     async def fake_create_plan(
         intent,
         prompt,
@@ -124,6 +125,20 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
     assert "日报口径" in prepared.context
     assert any(step["id"] == "dify_knowledge" for step in trace_steps)
     assert all("日报口径" not in str(step) for step in trace_steps)
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("整理当前所有用户", "platform_data_query"),
+        ("查询禁用账号", "platform_data_query"),
+        ("统计各个角色有多少用户", "platform_data_query"),
+        ("生成今天的生产日报", "report_generation"),
+        ("分析设备停机原因", "incident_analysis"),
+    ],
+)
+def test_supervisor_routes_platform_user_queries(prompt: str, expected: str) -> None:
+    assert planners.choose_intent(prompt) == expected
 
 
 def test_catalog_query_model_allows_parameterized_select() -> None:
@@ -278,7 +293,7 @@ def test_dynamic_sql_executes_in_read_only_transaction_and_limits_rows(
 def test_planner_removes_dynamic_sql_without_admin_permission(monkeypatch) -> None:
     async def fake_complete_json(_provider, _system_prompt, _user_prompt):
         return {
-            "intent": "incident_analysis",
+            "intent": "platform_data_query",
             "objective": "整理所有用户",
             "knowledge_query": "平台用户",
             "hypotheses": [],
@@ -295,7 +310,7 @@ def test_planner_removes_dynamic_sql_without_admin_permission(monkeypatch) -> No
     monkeypatch.setattr(planners, "complete_json", fake_complete_json)
     plan = asyncio.run(
         planners.create_plan(
-            "incident_analysis",
+            "platform_data_query",
             "整理所有用户",
             "deepseek",
             [{"role": "user", "content": "整理所有用户"}],
@@ -310,7 +325,7 @@ def test_planner_removes_dynamic_sql_without_admin_permission(monkeypatch) -> No
 
     admin_plan = asyncio.run(
         planners.create_plan(
-            "incident_analysis",
+            "platform_data_query",
             "整理所有用户",
             "deepseek",
             [{"role": "user", "content": "整理所有用户"}],
@@ -321,6 +336,144 @@ def test_planner_removes_dynamic_sql_without_admin_permission(monkeypatch) -> No
         )
     )
     assert admin_plan.dynamic_query is not None
+
+
+def test_platform_planner_supplies_safe_query_when_model_omits_it(monkeypatch) -> None:
+    async def fake_complete_json(_provider, system_prompt, _user_prompt):
+        assert "必须生成 dynamic_query" in system_prompt
+        return {
+            "intent": "platform_data_query",
+            "objective": "整理当前所有用户",
+            "knowledge_query": "平台用户",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": None,
+            "report_required": False,
+            "report_title": "平台用户查询",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    plan = asyncio.run(
+        planners.create_plan(
+            "platform_data_query",
+            "整理当前所有用户",
+            "deepseek",
+            [{"role": "user", "content": "整理当前所有用户"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=True,
+        )
+    )
+
+    assert plan.dynamic_query is not None
+    normalized, tables = validate_dynamic_sql(plan.dynamic_query.sql)
+    assert "password_hash" not in normalized
+    assert tables == ["public.app_users", "public.auth_roles"]
+
+
+def test_platform_planner_replaces_unsafe_model_sql(monkeypatch) -> None:
+    async def fake_complete_json(_provider, _system_prompt, _user_prompt):
+        return {
+            "intent": "platform_data_query",
+            "objective": "整理当前所有用户",
+            "knowledge_query": "平台用户",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": {
+                "purpose": "查询全部用户字段",
+                "sql": "SELECT * FROM public.app_users",
+            },
+            "report_required": False,
+            "report_title": "平台用户查询",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    plan = asyncio.run(
+        planners.create_plan(
+            "platform_data_query",
+            "整理当前所有用户",
+            "deepseek",
+            [{"role": "user", "content": "整理当前所有用户"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=True,
+        )
+    )
+
+    assert plan.dynamic_query is not None
+    normalized, _ = validate_dynamic_sql(plan.dynamic_query.sql)
+    assert "SELECT *" not in normalized
+    assert "password_hash" not in normalized
+
+
+def test_admin_platform_query_runs_dynamic_sql_through_full_graph(monkeypatch) -> None:
+    traces = []
+
+    async def fake_complete_json(_provider, _system_prompt, _user_prompt):
+        return {
+            "intent": "platform_data_query",
+            "objective": "整理当前所有用户",
+            "knowledge_query": "平台用户",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": None,
+            "report_required": False,
+            "report_title": "平台用户查询",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    monkeypatch.setattr(planners, "get_settings", lambda: settings())
+    monkeypatch.setattr(graph, "get_settings", lambda: settings())
+    monkeypatch.setattr(graph, "load_query_catalog", lambda: QueryCatalog())
+    monkeypatch.setattr(
+        graph,
+        "execute_dynamic_sql",
+        lambda _sql: {
+            "tool": "dynamic_sql",
+            "databaseType": "postgresql",
+            "status": "ok",
+            "queryFingerprint": "test",
+            "tables": ["public.app_users", "public.auth_roles"],
+            "columns": ["username", "role_code"],
+            "rows": [{"username": "admin", "role_code": "admin"}],
+            "truncated": False,
+        },
+    )
+
+    prepared = asyncio.run(
+        graph.prepare_agent(
+            21,
+            "整理当前所有用户",
+            "deepseek",
+            [{"role": "user", "content": "整理当前所有用户"}],
+            database_type="postgresql",
+            allow_dynamic_sql=True,
+            trace_callback=traces.append,
+        )
+    )
+
+    assert prepared.intent == "platform_data_query"
+    assert prepared.plan.dynamic_query is not None
+    assert prepared.observations[0]["rows"][0]["username"] == "admin"
+    assert "优先使用 Markdown 表格" in prepared.context
+    assert any(
+        step["id"] == "supervisor" and "平台数据查询" in step.get("detail", "")
+        for step in traces
+    )
+    assert any(
+        step["id"] == "dynamic_sql_access" and step["status"] == "completed"
+        for step in traces
+    )
+    assert any(
+        step["id"] == "dynamic_sql" and step["status"] == "completed"
+        for step in traces
+    )
+    assert all(step["id"] != "dify_knowledge" for step in traces)
 
 
 def test_database_node_executes_admin_dynamic_sql(monkeypatch) -> None:

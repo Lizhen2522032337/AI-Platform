@@ -69,13 +69,17 @@ def supervisor_node(state: AgentState) -> dict[str, object]:
     _emit_trace(state, "supervisor", "分析请求并选择处理路线", "running")
     intent = choose_intent(state["prompt"])
     logger.info("Agent supervisor routed: task_id=%s intent=%s", state["task_id"], intent)
-    intent_label = "报表生成" if intent == "report_generation" else "生产问题分析"
+    intent_labels = {
+        "incident_analysis": "生产问题分析",
+        "report_generation": "报表生成",
+        "platform_data_query": "平台数据查询",
+    }
     _emit_trace(
         state,
         "supervisor",
         "分析请求并选择处理路线",
         "completed",
-        detail=f"已识别为：{intent_label}",
+        detail=f"已识别为：{intent_labels[intent]}",
         duration_ms=round((time.perf_counter() - started) * 1000),
     )
     return {"intent": intent}
@@ -88,6 +92,26 @@ def route_planner(state: AgentState) -> str:
 async def _planner_node(state: AgentState) -> dict[str, object]:
     started = time.perf_counter()
     _emit_trace(state, "planner", "制定受控执行计划", "running")
+    current = get_settings()
+    dynamic_sql_available = bool(
+        state.get("allow_dynamic_sql", False)
+        and state["database_type"] == "postgresql"
+        and current.dynamic_sql_enabled
+        and current.postgres_enabled
+    )
+    _emit_trace(
+        state,
+        "dynamic_sql_access",
+        "检查动态数据库查询权限",
+        "completed" if dynamic_sql_available else "skipped",
+        detail=(
+            "管理员动态 SQL 查询已授权，并将继续执行 AST 白名单校验"
+            if dynamic_sql_available
+            else "动态 SQL 查询未授权、未启用或当前数据库不支持"
+        ),
+        kind="tool",
+        tool_name="dynamic_sql",
+    )
     catalog = load_query_catalog()
     plan = await create_plan(
         state["intent"],
@@ -99,14 +123,23 @@ async def _planner_node(state: AgentState) -> dict[str, object]:
         allow_dynamic_sql=state.get("allow_dynamic_sql", False),
     )
     logger.info(
-        "Agent plan ready: task_id=%s intent=%s queries=%d report=%s notify=%s",
+        "Agent plan ready: task_id=%s intent=%s queries=%d "
+        "dynamic_sql_allowed=%s dynamic_query=%s report=%s notify=%s",
         state["task_id"],
         plan.intent,
         len(plan.queries),
+        dynamic_sql_available,
+        plan.dynamic_query is not None,
         plan.report_required,
         plan.notify,
     )
-    output_label = "结构化报告" if plan.report_required else "分析结论"
+    output_label = (
+        "平台数据结果"
+        if plan.intent == "platform_data_query"
+        else "结构化报告"
+        if plan.report_required
+        else "分析结论"
+    )
     _emit_trace(
         state,
         "planner",
@@ -126,6 +159,10 @@ async def incident_planner_node(state: AgentState) -> dict[str, object]:
 
 
 async def report_planner_node(state: AgentState) -> dict[str, object]:
+    return await _planner_node(state)
+
+
+async def platform_data_planner_node(state: AgentState) -> dict[str, object]:
     return await _planner_node(state)
 
 
@@ -356,12 +393,20 @@ def context_builder_node(state: AgentState) -> dict[str, object]:
     observations = state.get("observations", [])
     evidence = json.dumps(observations, ensure_ascii=False, default=str)
     evidence = evidence[: max(1000, min(settings.agent_max_evidence_chars, 100000))]
-    report_instruction = (
-        "请输出结构化Markdown报告，至少包含摘要、现象、数据证据、原因分析、"
-        "风险、建议和待补充信息。所有结论区分事实、推断和未知。"
-        if plan.report_required
-        else "请给出问题分析结论，区分已验证事实、合理推断和仍需确认的信息。"
-    )
+    if plan.intent == "platform_data_query":
+        report_instruction = (
+            "请直接依据数据库工具证据整理平台数据；适合列表的数据优先使用 Markdown 表格，"
+            "说明总行数和是否截断，不要改写为故障分析。"
+        )
+    elif plan.report_required:
+        report_instruction = (
+            "请输出结构化Markdown报告，至少包含摘要、现象、数据证据、原因分析、"
+            "风险、建议和待补充信息。所有结论区分事实、推断和未知。"
+        )
+    else:
+        report_instruction = (
+            "请给出问题分析结论，区分已验证事实、合理推断和仍需确认的信息。"
+        )
     context = (
         "[Agent执行计划]\n"
         f"目标：{plan.objective}\n"
@@ -391,6 +436,7 @@ def build_agent_graph():
     builder.add_node("supervisor", supervisor_node)
     builder.add_node("incident_analysis", incident_planner_node)
     builder.add_node("report_generation", report_planner_node)
+    builder.add_node("platform_data_query", platform_data_planner_node)
     builder.add_node("dify_knowledge_tool", knowledge_tool_node)
     builder.add_node("database_query_tool", database_tool_node)
     builder.add_node("context_builder", context_builder_node)
@@ -401,10 +447,13 @@ def build_agent_graph():
         {
             "incident_analysis": "incident_analysis",
             "report_generation": "report_generation",
+            "platform_data_query": "platform_data_query",
         },
     )
     builder.add_edge("incident_analysis", "dify_knowledge_tool")
     builder.add_edge("report_generation", "dify_knowledge_tool")
+    # 平台用户查询不依赖企业知识库，直接进入受控数据库节点。
+    builder.add_edge("platform_data_query", "database_query_tool")
     builder.add_edge("dify_knowledge_tool", "database_query_tool")
     builder.add_edge("database_query_tool", "context_builder")
     builder.add_edge("context_builder", END)
