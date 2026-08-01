@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.catalog import QueryCatalog, load_query_catalog
 from app.agent.database_tool import DatabaseToolError, execute_catalog_query
+from app.agent.dynamic_sql_tool import DynamicSqlToolError, execute_dynamic_sql
 from app.agent.planners import choose_intent, create_plan
 from app.agent.types import AgentPlan, AgentState, DatabaseType
 from app.config.settings import get_settings
@@ -95,6 +96,7 @@ async def _planner_node(state: AgentState) -> dict[str, object]:
         state["messages"],
         catalog,
         state["database_type"],
+        allow_dynamic_sql=state.get("allow_dynamic_sql", False),
     )
     logger.info(
         "Agent plan ready: task_id=%s intent=%s queries=%d report=%s notify=%s",
@@ -110,7 +112,10 @@ async def _planner_node(state: AgentState) -> dict[str, object]:
         "planner",
         "制定受控执行计划",
         "completed",
-        detail=f"计划输出{output_label}，选择 {len(plan.queries)} 个批准查询",
+        detail=(
+            f"计划输出{output_label}，选择 {len(plan.queries)} 个批准查询"
+            + ("和 1 个动态 SQL 查询" if plan.dynamic_query else "")
+        ),
         duration_ms=round((time.perf_counter() - started) * 1000),
     )
     return {"plan": plan.model_dump()}
@@ -192,7 +197,7 @@ async def database_tool_node(state: AgentState) -> dict[str, object]:
     plan = AgentPlan.model_validate(state["plan"])
     catalog: QueryCatalog = load_query_catalog()
     observations = list(state.get("observations", []))
-    if not plan.queries:
+    if not plan.queries and plan.dynamic_query is None:
         _emit_trace(
             state,
             "database_queries",
@@ -277,6 +282,69 @@ async def database_tool_node(state: AgentState) -> dict[str, object]:
                 tool_name="database_query",
                 duration_ms=round((time.perf_counter() - started) * 1000),
             )
+    if plan.dynamic_query is not None:
+        started = time.perf_counter()
+        _emit_trace(
+            state,
+            "dynamic_sql",
+            "生成并执行平台用户查询",
+            "running",
+            detail="正在校验 PostgreSQL AST、表列白名单和只读边界",
+            kind="tool",
+            tool_name="dynamic_sql",
+        )
+        if not state.get("allow_dynamic_sql", False):
+            message = "当前用户没有动态 SQL 权限"
+            observations.append(
+                {"tool": "dynamic_sql", "status": "rejected", "message": message}
+            )
+            _emit_trace(
+                state,
+                "dynamic_sql",
+                "生成并执行平台用户查询",
+                "failed",
+                detail=message,
+                kind="tool",
+                tool_name="dynamic_sql",
+                duration_ms=round((time.perf_counter() - started) * 1000),
+            )
+        else:
+            try:
+                result = await asyncio.to_thread(
+                    execute_dynamic_sql,
+                    plan.dynamic_query.sql,
+                )
+                observations.append(result)
+                row_count = len(result.get("rows", []))
+                truncated = "，结果已截断" if result.get("truncated") else ""
+                _emit_trace(
+                    state,
+                    "dynamic_sql",
+                    "生成并执行平台用户查询",
+                    "completed",
+                    detail=f"AST 校验通过，返回 {row_count} 行{truncated}",
+                    kind="tool",
+                    tool_name="dynamic_sql",
+                    duration_ms=round((time.perf_counter() - started) * 1000),
+                )
+            except DynamicSqlToolError as error:
+                observations.append(
+                    {
+                        "tool": "dynamic_sql",
+                        "status": "error",
+                        "message": str(error),
+                    }
+                )
+                _emit_trace(
+                    state,
+                    "dynamic_sql",
+                    "生成并执行平台用户查询",
+                    "failed",
+                    detail=str(error),
+                    kind="tool",
+                    tool_name="dynamic_sql",
+                    duration_ms=round((time.perf_counter() - started) * 1000),
+                )
     return {"observations": observations}
 
 
@@ -352,6 +420,7 @@ async def prepare_agent(
     provider: str,
     messages: list[dict[str, str]],
     database_type: DatabaseType = "postgresql",
+    allow_dynamic_sql: bool = False,
     trace_callback: TraceCallback | None = None,
 ) -> AgentPreparation:
     """运行取证图；现有 Worker 仍只需调用原来的 FastAPI `/process`。"""
@@ -362,6 +431,7 @@ async def prepare_agent(
             "prompt": prompt,
             "provider": provider,
             "database_type": database_type,
+            "allow_dynamic_sql": allow_dynamic_sql,
             "messages": messages,
             "observations": [],
             "trace_callback": trace_callback,

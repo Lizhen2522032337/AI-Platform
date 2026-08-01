@@ -12,6 +12,7 @@ export interface AiTaskMessage {
   prompt: string;
   modelProvider: 'deepseek' | 'qwen';
   databaseType: 'postgresql' | 'db2';
+  allowDynamicSql: boolean;
   conversationId: number | null;
   createdAt: string;
 }

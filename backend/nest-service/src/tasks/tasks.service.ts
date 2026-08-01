@@ -85,6 +85,8 @@ export class TasksService {
         prompt: task.prompt,
         modelProvider: task.modelProvider,
         databaseType: task.databaseType,
+        // 动态用户 SQL 只能由服务端 RBAC 授权，不能信任前端请求字段。
+        allowDynamicSql: user.permissions.includes('users:manage'),
         conversationId,
         createdAt: task.createdAt.toISOString(),
       });

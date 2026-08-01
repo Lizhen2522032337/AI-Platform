@@ -7,6 +7,7 @@ FastAPI 内部从固定问答流水线升级为受控 LangGraph Agent。第一�
 
 1. 生产问题分析：根据 Dify 知识、批准的 PostgreSQL/DB2 查询和多轮对话形成原因分析。
 2. 报表生成：生成 Markdown 报告、证据 JSON 和每个数据库查询的 CSV，保存到 MinIO。
+3. 管理员平台数据整理：根据自然语言生成受限 PostgreSQL 查询，例如整理当前所有平台用户。
 
 用户可在前端按会话选择 PostgreSQL 或 DB2。DB2 未配置时 Agent 仍可使用 Dify 和大模型，但必须明确说明缺少生产数据，不能
 虚构查询结果。通知 Tool 默认关闭，确定渠道和审批规则后才能启用。
@@ -23,7 +24,7 @@ React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI /process
                                       \              /
                                        Dify Knowledge Tool
                                                 |
-                                  PostgreSQL / DB2 Query Tool
+                         Fixed Query Tool / Admin Dynamic SQL Tool
                                                 |
                                       Evidence Context Builder
                                                 |
@@ -39,13 +40,16 @@ Supervisor 当前使用稳定关键词分流；两个 Planner 使用选定的大
 
 ## 3. 安全边界
 
-- 模型不能提交任意 SQL，只能选择 `database-catalog.json` 中批准的 `query_id`。
+- 普通用户只能选择 `database-catalog.json` 中批准的 `query_id`，不能提交动态 SQL。
+- 只有服务端确认具有 `users:manage` 权限的管理员，Planner 才能生成一条动态 PostgreSQL 查询；客户端不能自行声明该权限。
+- 动态 SQL 使用 SQL AST 校验，只允许 `SELECT/WITH`、`public.app_users` 与 `public.auth_roles` 的非敏感列；禁止 `SELECT *`、递归 CTE、未批准函数、跨 Schema、系统表、写入、DDL 和多语句。
+- `password_hash`、`username_normalized`、`token_version` 不会提供给 Planner，执行层也会再次拒绝访问。
 - SQL 必须以 `SELECT` 或 `WITH` 开头，并拒绝写入、DDL、CALL 和多语句。
 - 同一 `query_id` 可配置 `postgresql` 和 `db2` 两套 SQL；Planner 只能看到当前选择方言可用的查询。
 - 所有参数使用 `:参数名`，执行器转换为对应驱动的绑定参数，不进行字符串拼接。
 - 两种数据库账号都应由 DBA 配置为只读；PostgreSQL 执行器还会强制开启只读事务。
 - 单次 Agent 查询数量、单条查询超时和返回行数均有限制。
-- 日志只记录任务 ID、查询 ID、行数和耗时，不记录 SQL、参数值、数据正文和密钥。
+- 动态查询也会强制只读事务、查询超时和独立行数上限；日志只记录 SQL 指纹、表名、行数和状态，不记录 SQL 正文、参数值、数据正文和密钥。
 - Dify 文本和数据库数据都被视为不可信证据，不能覆盖系统指令。
 - 通知同时要求用户明确提出、服务已启用、自动发送已启用，三项缺一不可。
 - DB2 DSN、Webhook 和 Dify/LLM Key 只在虚拟机 `/etc/enterprise-ai-platform/`。
@@ -69,6 +73,8 @@ DB2_MAX_ROWS=500
 POSTGRES_ENABLED=true
 POSTGRES_QUERY_TIMEOUT_SECONDS=30
 POSTGRES_MAX_ROWS=500
+DYNAMIC_SQL_ENABLED=true
+DYNAMIC_SQL_MAX_ROWS=200
 DATABASE_CATALOG_FILE=/etc/enterprise-ai-platform/database-catalog.json
 
 REPORT_FILES_ENABLED=true
@@ -82,6 +88,8 @@ NOTIFICATION_TIMEOUT_SECONDS=10
 
 PostgreSQL 的 `POSTGRES_HOST/PORT/DB/USER/PASSWORD/SSLMODE` 直接复用
 `/etc/enterprise-ai-platform/database.env`，无需在 `agent.env` 重复保存密码。
+
+当前“整理平台用户”使用现有平台 PostgreSQL 连接，无需再提供密码、表名或列名。若以后要开放其他业务表，应先提供表结构和敏感字段说明，再扩充代码中的动态查询白名单；不要把真实连接密码贴进聊天或提交到 Git。
 
 ### 4.2 通用业务与查询目录
 

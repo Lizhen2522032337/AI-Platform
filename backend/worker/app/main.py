@@ -183,6 +183,7 @@ def stream_ai_service(
     prompt: str,
     model_provider: str,
     database_type: str,
+    allow_dynamic_sql: bool,
     messages: list[dict[str, str]],
 ) -> Iterator[dict[str, Any]]:
     """逐行读取内部 FastAPI 返回的 NDJSON 大模型事件流。"""
@@ -194,6 +195,7 @@ def stream_ai_service(
             "prompt": prompt,
             "modelProvider": model_provider,
             "databaseType": database_type,
+            "allowDynamicSql": allow_dynamic_sql,
             "messages": messages,
         }
     ).encode("utf-8")
@@ -232,6 +234,8 @@ def process_message(body: bytes) -> None:
     prompt = str(message["prompt"])
     model_provider = str(message.get("modelProvider") or "deepseek")
     database_type = str(message.get("databaseType") or "postgresql")
+    # 只接受 NestJS 写入 RabbitMQ 的 JSON 布尔值；缺省和其他类型均按无权限处理。
+    allow_dynamic_sql = message.get("allowDynamicSql") is True
     conversation_id_value = message.get("conversationId")
     conversation_id = (
         int(conversation_id_value) if conversation_id_value is not None else None
@@ -292,7 +296,12 @@ def process_message(body: bytes) -> None:
     save_state(task_id, processing_state)
     try:
         for event in stream_ai_service(
-            task_id, prompt, model_provider, database_type, messages
+            task_id,
+            prompt,
+            model_provider,
+            database_type,
+            allow_dynamic_sql,
+            messages,
         ):
             event_type = event.get("type")
             if event_type == "trace":

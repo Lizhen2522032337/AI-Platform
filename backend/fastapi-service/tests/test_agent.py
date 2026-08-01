@@ -1,14 +1,20 @@
 """LangGraph Agent 的目录校验、安全边界和文件 Tool 测试。"""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
-from app.agent import graph
+from app.agent import graph, planners
 from app.agent.catalog import CatalogQuery, QueryCatalog
 from app.agent.database_tool import _prepare_sql
 from app.agent.db2_tool import Db2ToolError, _assert_read_only_sql
+from app.agent.dynamic_sql_tool import (
+    DynamicSqlToolError,
+    execute_dynamic_sql,
+    validate_dynamic_sql,
+)
 from app.agent.report_tools import create_report_files
-from app.agent.types import AgentPlan
+from app.agent.types import AgentPlan, DynamicSqlQuery
 from app.config.settings import Settings
 from app.dify import KnowledgeResult
 
@@ -20,6 +26,7 @@ def settings(**overrides) -> Settings:
         "deepseek_api_key": "test-deepseek-key",
         "qwen_api_key": "test-qwen-key",
         "qwen_base_url": "https://example.invalid/v1",
+        "postgres_password": "test-postgres-password",
     }
     values.update(overrides)
     return Settings(**values)
@@ -75,10 +82,17 @@ def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
     trace_steps = []
     async def fake_create_plan(
-        intent, prompt, provider, messages, catalog, database_type
+        intent,
+        prompt,
+        provider,
+        messages,
+        catalog,
+        database_type,
+        allow_dynamic_sql=False,
     ):
         assert intent == "report_generation"
         assert database_type == "postgresql"
+        assert allow_dynamic_sql is False
         return AgentPlan(
             intent=intent,
             objective=prompt,
@@ -157,3 +171,195 @@ def test_catalog_selects_sql_for_requested_database_dialect() -> None:
     assert "%s" in postgresql_sql
     assert "?" in db2_sql
     assert postgresql_values == db2_values
+
+
+def test_dynamic_sql_accepts_explicit_platform_user_join() -> None:
+    normalized, tables = validate_dynamic_sql(
+        """
+        SELECT u.id, u.username, u.display_name, r.code AS role_code,
+               u.is_active, u.last_login_at, u.created_at
+        FROM public.app_users AS u
+        JOIN public.auth_roles AS r ON r.id = u.role_id
+        ORDER BY u.created_at DESC
+        """
+    )
+
+    assert "password_hash" not in normalized
+    assert tables == ["public.app_users", "public.auth_roles"]
+
+
+def test_dynamic_sql_accepts_safe_aggregate_and_cte() -> None:
+    aggregate, _ = validate_dynamic_sql(
+        "SELECT COUNT(*) AS user_count FROM public.app_users WHERE is_active IS TRUE"
+    )
+    cte, _ = validate_dynamic_sql(
+        """
+        WITH active AS (
+          SELECT id, username FROM public.app_users WHERE is_active IS TRUE
+        )
+        SELECT username FROM active ORDER BY username
+        """
+    )
+
+    assert "COUNT(*)" in aggregate
+    assert "WITH active" in cte
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM public.app_users",
+        "SELECT password_hash FROM public.app_users",
+        "SELECT id FROM public.ai_tasks",
+        "SELECT id FROM app_users",
+        "SELECT pg_read_file('/etc/passwd') FROM public.app_users",
+        "SELECT pg_sleep(10) FROM public.app_users",
+        "SELECT id INTO TEMP copied_users FROM public.app_users",
+        "UPDATE public.app_users SET is_active = FALSE",
+        "SELECT id FROM public.app_users; DELETE FROM public.app_users",
+        "SELECT tableoid, id AS tableoid FROM public.app_users",
+        """SELECT id FROM public.app_users
+           WHERE EXISTS (SELECT id AS tableoid FROM public.auth_roles)
+           ORDER BY tableoid""",
+    ],
+)
+def test_dynamic_sql_rejects_unsafe_statements(sql: str) -> None:
+    with pytest.raises(DynamicSqlToolError):
+        validate_dynamic_sql(sql)
+
+
+def test_dynamic_sql_executes_in_read_only_transaction_and_limits_rows(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    class FakeCursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, parameters=None):
+            calls.append((statement, parameters))
+            if "dynamic_result" in statement:
+                self.description = [SimpleNamespace(name="username")]
+
+        def fetchall(self):
+            return [("admin",), ("second",)]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        "app.agent.dynamic_sql_tool.psycopg.connect",
+        lambda **_kwargs: FakeConnection(),
+    )
+    result = execute_dynamic_sql(
+        "SELECT username FROM public.app_users ORDER BY username",
+        settings(dynamic_sql_max_rows=1),
+    )
+
+    assert calls[0][0] == "SET TRANSACTION READ ONLY"
+    assert calls[-1][1] == (2,)
+    assert result["rows"] == [{"username": "admin"}]
+    assert result["truncated"] is True
+
+
+def test_planner_removes_dynamic_sql_without_admin_permission(monkeypatch) -> None:
+    async def fake_complete_json(_provider, _system_prompt, _user_prompt):
+        return {
+            "intent": "incident_analysis",
+            "objective": "整理所有用户",
+            "knowledge_query": "平台用户",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": {
+                "purpose": "查询用户",
+                "sql": "SELECT id, username FROM public.app_users",
+            },
+            "report_required": False,
+            "report_title": "用户清单",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    plan = asyncio.run(
+        planners.create_plan(
+            "incident_analysis",
+            "整理所有用户",
+            "deepseek",
+            [{"role": "user", "content": "整理所有用户"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=False,
+        )
+    )
+
+    assert plan.dynamic_query is None
+
+    admin_plan = asyncio.run(
+        planners.create_plan(
+            "incident_analysis",
+            "整理所有用户",
+            "deepseek",
+            [{"role": "user", "content": "整理所有用户"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=True,
+        )
+    )
+    assert admin_plan.dynamic_query is not None
+
+
+def test_database_node_executes_admin_dynamic_sql(monkeypatch) -> None:
+    traces = []
+    monkeypatch.setattr(graph, "load_query_catalog", lambda: QueryCatalog())
+    monkeypatch.setattr(
+        graph,
+        "execute_dynamic_sql",
+        lambda sql: {
+            "tool": "dynamic_sql",
+            "status": "ok",
+            "rows": [{"username": "admin"}],
+            "columns": ["username"],
+            "truncated": False,
+            "queryFingerprint": "test",
+        },
+    )
+    plan = AgentPlan(
+        intent="incident_analysis",
+        objective="整理所有用户",
+        knowledge_query="平台用户",
+        dynamic_query=DynamicSqlQuery(
+            purpose="查询用户",
+            sql="SELECT username FROM public.app_users",
+        ),
+    )
+
+    result = asyncio.run(
+        graph.database_tool_node(
+            {
+                "task_id": 18,
+                "database_type": "postgresql",
+                "allow_dynamic_sql": True,
+                "plan": plan.model_dump(),
+                "observations": [],
+                "trace_callback": traces.append,
+            }
+        )
+    )
+
+    assert result["observations"][0]["tool"] == "dynamic_sql"
+    assert any(step["id"] == "dynamic_sql" for step in traces)

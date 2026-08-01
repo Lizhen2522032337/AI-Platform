@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     agent_enabled: bool = True
     agent_max_queries: int = 6
     agent_max_evidence_chars: int = 24000
+    # 动态 SQL 第一阶段只允许管理员查询内置平台用户白名单。
+    dynamic_sql_enabled: bool = True
+    dynamic_sql_max_rows: int = 200
 
     # Agent 数据库连接统一由虚拟机 Git 外配置注入。PostgreSQL 默认使用 Compose
     # 服务名 postgres；DB2 默认关闭，未提供配置时仍可使用 Dify 完成普通问答。

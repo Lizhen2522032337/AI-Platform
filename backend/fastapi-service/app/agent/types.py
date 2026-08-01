@@ -18,6 +18,13 @@ class PlannedQuery(BaseModel):
     parameters: dict[str, Scalar] = Field(default_factory=dict)
 
 
+class DynamicSqlQuery(BaseModel):
+    """Planner 生成、但必须经过 AST 白名单校验后才能执行的 PostgreSQL 查询。"""
+
+    purpose: str = Field(min_length=1, max_length=500)
+    sql: str = Field(min_length=1, max_length=8000)
+
+
 class AgentPlan(BaseModel):
     """LLM Planner 的结构化输出；执行前还会进行查询 ID 白名单校验。"""
 
@@ -26,6 +33,7 @@ class AgentPlan(BaseModel):
     knowledge_query: str = Field(min_length=1, max_length=250)
     hypotheses: list[str] = Field(default_factory=list, max_length=8)
     queries: list[PlannedQuery] = Field(default_factory=list, max_length=12)
+    dynamic_query: DynamicSqlQuery | None = None
     report_required: bool = False
     report_title: str = Field(default="生产问题分析", max_length=200)
     notify: bool = False
@@ -38,6 +46,7 @@ class AgentState(TypedDict, total=False):
     prompt: str
     provider: str
     database_type: DatabaseType
+    allow_dynamic_sql: bool
     messages: list[dict[str, str]]
     intent: AgentIntent
     plan: dict[str, Any]

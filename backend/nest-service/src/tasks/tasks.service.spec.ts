@@ -77,6 +77,7 @@ describe('TasksService', () => {
       prompt: task.prompt,
       modelProvider: 'deepseek',
       databaseType: 'postgresql',
+      allowDynamicSql: false,
       conversationId: null,
       createdAt: '2026-07-26T00:00:00.000Z',
     });
@@ -88,6 +89,29 @@ describe('TasksService', () => {
       databaseType: 'postgresql',
       conversationId: null,
     });
+  });
+
+  it('grants dynamic SQL only from the server-side admin permission', async () => {
+    const task = sampleTask();
+    repository.create.mockReturnValue(task);
+    repository.save.mockResolvedValue(task);
+
+    await service.create(
+      {
+        prompt: '整理所有用户',
+        modelProvider: 'deepseek',
+        databaseType: 'postgresql',
+      },
+      {
+        ...user,
+        role: 'admin',
+        permissions: [...user.permissions, 'users:manage'],
+      },
+    );
+
+    expect(rabbitService.publishTask.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ allowDynamicSql: true }),
+    );
   });
 
   it('returns tasks newest first', async () => {

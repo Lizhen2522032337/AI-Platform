@@ -37,29 +37,18 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
     database_updates: list[tuple[int, str]] = []
     redis_updates: list[dict] = []
 
-    monkeypatch.setattr(
-        main,
-        "update_task",
-        lambda task_id, status, **_: database_updates.append((task_id, status)),
-    )
-    monkeypatch.setattr(
-        main,
-        "save_state",
-        lambda _task_id, state: redis_updates.append(state),
-    )
-    monkeypatch.setattr(
-        main,
-        "load_conversation_messages",
-        lambda _conversation_id, _task_id, prompt: [
-            {"role": "user", "content": "上一轮"},
-            {"role": "assistant", "content": "上一轮回答"},
-            {"role": "user", "content": prompt},
-        ],
-    )
-    monkeypatch.setattr(
-        main,
-        "stream_ai_service",
-        lambda task_id, _prompt, provider, database_type, messages: iter(
+    def fake_stream_ai_service(
+        task_id,
+        _prompt,
+        provider,
+        database_type,
+        allow_dynamic_sql,
+        messages,
+    ):
+        assert database_type == "postgresql"
+        assert allow_dynamic_sql is True
+        assert messages[-1]["content"] == "测试"
+        return iter(
             [
                 {
                     "type": "trace",
@@ -85,7 +74,31 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
                     },
                 },
             ]
-        ),
+        )
+
+    monkeypatch.setattr(
+        main,
+        "update_task",
+        lambda task_id, status, **_: database_updates.append((task_id, status)),
+    )
+    monkeypatch.setattr(
+        main,
+        "save_state",
+        lambda _task_id, state: redis_updates.append(state),
+    )
+    monkeypatch.setattr(
+        main,
+        "load_conversation_messages",
+        lambda _conversation_id, _task_id, prompt: [
+            {"role": "user", "content": "上一轮"},
+            {"role": "assistant", "content": "上一轮回答"},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "stream_ai_service",
+        fake_stream_ai_service,
     )
 
     main.process_message(
@@ -96,6 +109,7 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
                 "prompt": "测试",
                 "modelProvider": "qwen",
                 "databaseType": "postgresql",
+                "allowDynamicSql": True,
                 "conversationId": 5,
             }
         ).encode()

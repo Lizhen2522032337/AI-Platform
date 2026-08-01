@@ -26,10 +26,17 @@ def test_health_checks_integrations(monkeypatch) -> None:
 
 def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     async def fake_prepare(
-        task_id, prompt, provider, messages, database_type, trace_callback
+        task_id,
+        prompt,
+        provider,
+        messages,
+        database_type,
+        allow_dynamic_sql,
+        trace_callback,
     ):
         assert (task_id, prompt, provider) == (7, "测试任务", "qwen")
         assert database_type == "postgresql"
+        assert allow_dynamic_sql is True
         assert messages[-1] == {"role": "user", "content": "测试任务"}
         trace_callback(
             {
@@ -87,6 +94,7 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
             "taskId": 7,
             "prompt": "测试任务",
             "modelProvider": "qwen",
+            "allowDynamicSql": True,
             "messages": [
                 {"role": "user", "content": "你好"},
                 {"role": "assistant", "content": "你好，有什么可以帮你？"},

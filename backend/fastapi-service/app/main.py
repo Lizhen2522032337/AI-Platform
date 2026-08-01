@@ -43,6 +43,8 @@ class ProcessRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     model_provider: ModelProvider = Field(alias="modelProvider")
     database_type: DatabaseType = Field(default="postgresql", alias="databaseType")
+    # 该权限只能由 NestJS 根据服务端 RBAC 写入 RabbitMQ，前端不能直接调用本接口。
+    allow_dynamic_sql: bool = Field(default=False, alias="allowDynamicSql")
     messages: list[ConversationMessage] = Field(min_length=1, max_length=41)
 
 
@@ -139,7 +141,8 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                     payload.model_provider,
                     history,
                     payload.database_type,
-                    trace_queue.put_nowait,
+                    allow_dynamic_sql=payload.allow_dynamic_sql,
+                    trace_callback=trace_queue.put_nowait,
                 )
             )
             while not agent_task.done() or not trace_queue.empty():

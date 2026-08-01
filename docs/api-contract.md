@@ -152,6 +152,7 @@ Authorization: Bearer {DIFY_API_KEY}
   "prompt": "总结设备巡检记录",
   "modelProvider": "deepseek",
   "databaseType": "postgresql",
+  "allowDynamicSql": true,
   "messages": [
     { "role": "user", "content": "上一轮问题" },
     { "role": "assistant", "content": "上一轮回答" },
@@ -159,6 +160,8 @@ Authorization: Bearer {DIFY_API_KEY}
   ]
 }
 ```
+
+`allowDynamicSql` 不是外部 API 参数，而是 NestJS 根据当前登录用户是否具有 `users:manage` 权限生成并经 RabbitMQ、Worker 传入 FastAPI。普通用户始终为 `false`；FastAPI 还会执行独立的 SQL AST 和白名单校验，不能依赖该布尔值作为唯一安全边界。
 
 响应媒体类型为 `application/x-ndjson`，每行一个事件：
 
@@ -187,6 +190,7 @@ FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。
   "prompt": "总结设备巡检记录",
   "modelProvider": "deepseek",
   "databaseType": "postgresql",
+  "allowDynamicSql": true,
   "conversationId": 8,
   "createdAt": "2026-07-26T12:00:00.000Z"
 }
@@ -200,6 +204,7 @@ Worker 根据 `conversationId` 从 PostgreSQL 读取最近 `AI_CONTEXT_TURNS` �
   "prompt": "第二个问题",
   "modelProvider": "deepseek",
   "databaseType": "postgresql",
+  "allowDynamicSql": true,
   "messages": [
     { "role": "user", "content": "第一个问题" },
     { "role": "assistant", "content": "第一个回答" },
