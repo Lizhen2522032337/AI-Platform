@@ -27,7 +27,10 @@ readonly -a INFRASTRUCTURE_SERVICES=(redis rabbitmq qdrant minio)
 readonly -a APPLICATION_SERVICES=(frontend fastapi-service nest-service gin-service worker)
 readonly -a BACKEND_SERVICES=(fastapi-service nest-service gin-service worker)
 readonly -a DATABASE_SERVICES=(nest-service worker)
-export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE
+# FastAPI Dockerfile 使用 BuildKit cache mount 保存 pip 下载缓存。Compose v2 默认
+# 已启用 BuildKit；这里显式保留用户设置，并在未设置时启用。
+DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
+export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE DOCKER_BUILDKIT
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"

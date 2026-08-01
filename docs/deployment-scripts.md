@@ -310,6 +310,16 @@ docker compose -f deploy/docker-compose.yml --profile managed-db build --pull \
 
 第一次会下载 Node.js、Python、Go 和各语言依赖，耗时较长。
 
+FastAPI 使用两级增量缓存：
+
+1. `requirements.txt` 未变化时，Docker 直接复用完整 Python 依赖层，不再次执行 pip。
+2. `requirements.txt` 变化导致依赖层重建时，BuildKit 复用虚拟机上的 pip 下载缓存，
+   只重新下载新增或版本变化的文件。
+
+Python 大版本、基础镜像摘要或 `requirements.txt` 变化时，仍会重新创建依赖层；
+这是为了保证镜像不可变和二进制扩展与 Python ABI 一致。不要在运行中的容器内直接
+执行 `pip install`，否则容器重建后改动会丢失。
+
 ### 第 6 步：启动应用，但暂不启动 Nginx
 
 ```bash
