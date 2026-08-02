@@ -3,10 +3,11 @@
 import json
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 from app import main
 from app.agent.graph import AgentPreparation
 from app.agent.types import AgentPlan
-from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
 
@@ -110,6 +111,100 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
     assert events[-1]["result"]["text"] == "处理完成"
     assert events[-1]["result"]["agent"]["intent"] == "incident_analysis"
     assert events[-1]["result"]["executionTrace"][-1]["id"] == "model_generation"
+
+
+def test_platform_data_query_renders_rows_without_second_llm(monkeypatch) -> None:
+    async def fake_prepare(
+        task_id,
+        prompt,
+        provider,
+        messages,
+        database_type,
+        allow_dynamic_sql,
+        trace_callback,
+    ):
+        assert task_id == 8
+        assert allow_dynamic_sql is True
+        return AgentPreparation(
+            intent="platform_data_query",
+            plan=AgentPlan(
+                intent="platform_data_query",
+                objective=prompt,
+                knowledge_query="平台用户",
+            ),
+            context="包含两行平台用户证据",
+            observations=[
+                {
+                    "tool": "dynamic_sql",
+                    "status": "ok",
+                    "columns": ["username", "display_name", "role_code", "is_active"],
+                    "rows": [
+                        {
+                            "username": "admin",
+                            "display_name": "系统管理员",
+                            "role_code": "admin",
+                            "is_active": True,
+                        },
+                        {
+                            "username": "operator",
+                            "display_name": "操作员",
+                            "role_code": "user",
+                            "is_active": False,
+                        },
+                    ],
+                    "truncated": False,
+                }
+            ],
+        )
+
+    async def forbidden_stream_chat(*_args, **_kwargs):
+        raise AssertionError("平台数据查询不应再次调用大模型")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(agent_enabled=True))
+    monkeypatch.setattr(main, "prepare_agent", fake_prepare)
+    monkeypatch.setattr(main, "stream_chat", forbidden_stream_chat)
+    monkeypatch.setattr(
+        main,
+        "save_result",
+        lambda task_id, _prompt, answer, provider, model, _usage, artifacts, metadata, execution_trace: {
+            "taskId": task_id,
+            "text": answer,
+            "provider": provider,
+            "model": model,
+            "artifacts": artifacts,
+            "agent": metadata,
+            "executionTrace": execution_trace,
+        },
+    )
+
+    response = client.post(
+        "/process",
+        json={
+            "taskId": 8,
+            "prompt": "整理当前所有用户",
+            "modelProvider": "deepseek",
+            "databaseType": "postgresql",
+            "allowDynamicSql": True,
+            "messages": [{"role": "user", "content": "整理当前所有用户"}],
+        },
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    complete = events[-1]["result"]
+    assert complete["model"] == "platform-data-renderer"
+    assert "本次查询返回 **2** 条用户记录" in complete["text"]
+    assert "| admin | 系统管理员 | admin | 是 |" in complete["text"]
+    assert "| operator | 操作员 | user | 否 |" in complete["text"]
+    generation = next(
+        event["step"]
+        for event in events
+        if event.get("type") == "trace"
+        and event.get("step", {}).get("id") == "model_generation"
+        and event.get("step", {}).get("status") == "completed"
+    )
+    assert generation["toolName"] == "platform_data_renderer"
 
 
 def test_process_rejects_blank_prompt() -> None:

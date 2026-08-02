@@ -176,7 +176,7 @@ Authorization: Bearer {DIFY_API_KEY}
 {"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，并跳过无关的 Dify 知识检索。
+`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，跳过无关的 Dify 知识检索，并使用 `platform_data_renderer` 将已校验行确定性渲染为 Markdown 表格。
 
 FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务会把 Markdown、证据 JSON 和数据库查询 CSV 写入 MinIO；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 

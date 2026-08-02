@@ -14,6 +14,7 @@ from starlette.responses import StreamingResponse
 
 from app.agent import AgentPreparation, prepare_agent
 from app.agent.notification_tool import NotificationToolError, send_notification
+from app.agent.platform_data_renderer import render_platform_data_answer
 from app.agent.report_tools import create_report_files
 from app.agent.types import DatabaseType
 from app.config.settings import get_settings
@@ -189,35 +190,58 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             merge_trace_step(execution_trace, retrieval_step)
             yield ndjson({"type": "trace", "step": retrieval_step})
 
+        platform_data_result = bool(
+            preparation is not None
+            and preparation.intent == "platform_data_query"
+        )
         generation_started = time.perf_counter()
         generation_step: dict[str, object] = {
             "id": "model_generation",
             "title": "生成最终回答",
             "status": "running",
             "kind": "tool",
-            "toolName": payload.model_provider,
-            "detail": f"正在调用 {payload.model_provider}",
+            "toolName": (
+                "platform_data_renderer" if platform_data_result else payload.model_provider
+            ),
+            "detail": (
+                "正在把已校验的平台数据渲染为表格"
+                if platform_data_result
+                else f"正在调用 {payload.model_provider}"
+            ),
         }
         merge_trace_step(execution_trace, generation_step)
         yield ndjson({"type": "trace", "step": generation_step})
-        async for event in stream_chat(
-            payload.model_provider,
-            history,
-            evidence_context,
-        ):
-            if event["type"] == "start":
-                model = str(event["model"])
-                generation_step = {
-                    **generation_step,
-                    "detail": f"模型：{model}",
+        if platform_data_result and preparation is not None:
+            model = "platform-data-renderer"
+            rendered_answer = render_platform_data_answer(preparation.observations)
+            answer_parts.append(rendered_answer)
+            yield ndjson(
+                {
+                    "type": "start",
+                    "provider": payload.model_provider,
+                    "model": model,
                 }
-                merge_trace_step(execution_trace, generation_step)
-                yield ndjson({"type": "trace", "step": generation_step})
-            elif event["type"] == "delta":
-                answer_parts.append(str(event["text"]))
-            elif event["type"] == "usage":
-                usage = event["usage"]
-            yield ndjson(event)
+            )
+            yield ndjson({"type": "delta", "text": rendered_answer})
+        else:
+            async for event in stream_chat(
+                payload.model_provider,
+                history,
+                evidence_context,
+            ):
+                if event["type"] == "start":
+                    model = str(event["model"])
+                    generation_step = {
+                        **generation_step,
+                        "detail": f"模型：{model}",
+                    }
+                    merge_trace_step(execution_trace, generation_step)
+                    yield ndjson({"type": "trace", "step": generation_step})
+                elif event["type"] == "delta":
+                    answer_parts.append(str(event["text"]))
+                elif event["type"] == "usage":
+                    usage = event["usage"]
+                yield ndjson(event)
 
         answer = "".join(answer_parts).strip()
         if not answer:
@@ -225,7 +249,11 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
         generation_step = {
             **generation_step,
             "status": "completed",
-            "detail": f"模型：{model or payload.model_provider}，生成 {len(answer)} 个字符",
+            "detail": (
+                f"结构化渲染器生成 {len(answer)} 个字符"
+                if platform_data_result
+                else f"模型：{model or payload.model_provider}，生成 {len(answer)} 个字符"
+            ),
             "durationMs": round((time.perf_counter() - generation_started) * 1000),
         }
         merge_trace_step(execution_trace, generation_step)
