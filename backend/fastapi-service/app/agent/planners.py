@@ -21,6 +21,7 @@ _REPORT_WORDS = ("报表", "报告", "统计", "趋势", "汇总", "导出", "�
 _FILE_EXPORT_WORDS = ("导出", "下载", "excel", "xlsx", "word", "docx", "pdf", "csv", "文件", "文档", "报表", "报告")
 _NOTIFY_WORDS = ("通知", "发送", "推送", "告警")
 _PLATFORM_USER_WORDS = ("用户", "账号", "账户", "角色", "权限")
+_PLATFORM_TASK_WORDS = ("任务",)
 _PLATFORM_QUERY_WORDS = ("整理", "列出", "查询", "查看", "统计", "汇总", "筛选", "多少")
 _DEFAULT_PLATFORM_USERS_SQL = """
 SELECT u.id, u.username, u.display_name, r.code AS role_code,
@@ -30,12 +31,20 @@ FROM public.app_users AS u
 JOIN public.auth_roles AS r ON r.id = u.role_id
 ORDER BY u.id
 """.strip()
+_DEFAULT_PLATFORM_TASKS_SQL = """
+SELECT t.id AS task_id, t.prompt, t.status, t.model_provider, t.model_name,
+       t.database_type, u.username AS created_by_username, t.conversation_id,
+       t.created_at, t.updated_at
+FROM public.ai_tasks AS t
+LEFT JOIN public.app_users AS u ON u.id = t.created_by
+ORDER BY t.created_at DESC
+""".strip()
 
 
 def choose_intent(prompt: str) -> AgentIntent:
     """Supervisor 先做稳定的业务分流，避免每次多调用一次模型。"""
 
-    if any(word in prompt for word in _PLATFORM_USER_WORDS) and any(
+    if any(word in prompt for word in (*_PLATFORM_USER_WORDS, *_PLATFORM_TASK_WORDS)) and any(
         word in prompt for word in _PLATFORM_QUERY_WORDS
     ):
         return "platform_data_query"
@@ -55,6 +64,7 @@ def _history_text(messages: list[dict[str, str]]) -> str:
 
 def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
     if intent == "platform_data_query":
+        is_task_query = any(word in prompt for word in _PLATFORM_TASK_WORDS)
         return AgentPlan(
             intent=intent,
             objective=prompt[:1000],
@@ -62,7 +72,7 @@ def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
             hypotheses=[],
             queries=[],
             report_required=False,
-            report_title="平台用户查询",
+            report_title="平台任务查询" if is_task_query else "平台用户查询",
             notify=False,
         )
     return AgentPlan(
@@ -99,7 +109,7 @@ report_required, report_title, notify。queries 每项包含 query_id, purpose, 
         query_rule = """
 你可以从 approved_queries 选择固定 query_id；如果固定查询不能回答用户问题，
 可以设置一个 dynamic_query，其中只包含 purpose 和 sql。候选 SQL 必须严格遵守
-dynamic_sql_schema，只能查询 public.app_users/public.auth_roles，必须显式列名和 schema。
+dynamic_sql_schema，只能查询其中列出的平台运维表，必须显式列名和 schema。
 不得访问敏感列，不得生成写入语句。若不需要动态查询，dynamic_query 必须为 null。
 """.strip()
     else:
@@ -198,9 +208,18 @@ async def create_plan(
                 plan.dynamic_query = None
         if plan.dynamic_query is None:
             logger.warning("Platform data planner omitted dynamic SQL; safe fallback used")
+            is_task_query = any(word in prompt for word in _PLATFORM_TASK_WORDS)
             plan.dynamic_query = DynamicSqlQuery(
-                purpose="查询当前平台用户及其角色和状态",
-                sql=_DEFAULT_PLATFORM_USERS_SQL,
+                purpose=(
+                    "查询当前平台任务清单"
+                    if is_task_query
+                    else "查询当前平台用户及其角色和状态"
+                ),
+                sql=(
+                    _DEFAULT_PLATFORM_TASKS_SQL
+                    if is_task_query
+                    else _DEFAULT_PLATFORM_USERS_SQL
+                ),
             )
     if intent == "report_generation" or any(
         word in prompt.lower() for word in _FILE_EXPORT_WORDS

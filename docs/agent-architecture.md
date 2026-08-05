@@ -44,7 +44,10 @@ Supervisor 当前使用稳定关键词分流；故障分析、报表生成、平
 
 - 普通用户只能选择 `database-catalog.json` 中批准的 `query_id`，不能提交动态 SQL。
 - 只有服务端确认具有 `users:manage` 权限的管理员，Planner 才能生成一条动态 PostgreSQL 查询；客户端不能自行声明该权限。
-- 动态 SQL 使用 SQL AST 校验，只允许 `SELECT/WITH`、`public.app_users` 与 `public.auth_roles` 的非敏感列；禁止 `SELECT *`、递归 CTE、未批准函数、跨 Schema、系统表、写入、DDL 和多语句。
+- 动态 SQL 使用 SQL AST 校验，只允许管理员通过 `SELECT/WITH` 查询
+  `public.ai_tasks`、`public.app_users` 与 `public.auth_roles` 的白名单字段；
+  任务回答、对象存储 Key、密码哈希等字段不开放，并禁止 `SELECT *`、递归 CTE、
+  未批准函数、跨 Schema、系统表、写入、DDL 和多语句。
 - `password_hash`、`username_normalized`、`token_version` 不会提供给 Planner，执行层也会再次拒绝访问。
 - 前台轨迹会显示动态 SQL 权限是否可用、是否生成查询以及执行行数，但不会显示 SQL 正文和数据正文。
 - SQL 必须以 `SELECT` 或 `WITH` 开头，并拒绝写入、DDL、CALL 和多语句。

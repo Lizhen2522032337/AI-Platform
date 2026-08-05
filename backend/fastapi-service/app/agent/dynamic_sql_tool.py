@@ -22,8 +22,21 @@ class DynamicSqlToolError(RuntimeError):
     """可以安全返回给 Agent 的动态 SQL 校验或执行错误。"""
 
 
-# 第一阶段只开放平台用户查询需要的最小字段；敏感字段不会提供给 Planner。
+# 仅向管理员动态查询开放平台运维所需的最小字段；回答正文、对象存储 Key、
+# 密码哈希等敏感或大文本字段不会提供给 Planner。
 _PLATFORM_SCHEMA: dict[str, dict[str, str]] = {
+    "ai_tasks": {
+        "id": "任务 ID",
+        "prompt": "用户提交的任务内容",
+        "status": "任务状态",
+        "model_provider": "模型供应商",
+        "model_name": "实际模型名称",
+        "database_type": "任务选择的数据源类型",
+        "created_by": "创建用户 ID，可关联 app_users.id",
+        "conversation_id": "所属会话 ID",
+        "created_at": "任务创建时间",
+        "updated_at": "任务更新时间",
+    },
     "app_users": {
         "id": "用户 ID",
         "username": "登录用户名",
@@ -79,7 +92,7 @@ _BLOCKED_NODE_KEYS = {
 
 
 def planner_schema() -> dict[str, object]:
-    """返回可以交给 Planner 的非敏感平台用户数据字典。"""
+    """返回可以交给管理员 Planner 的非敏感平台运维数据字典。"""
 
     return {
         "database": "postgresql",
@@ -100,7 +113,10 @@ def planner_schema() -> dict[str, object]:
             }
             for table, columns in _PLATFORM_SCHEMA.items()
         ],
-        "relationships": ["public.app_users.role_id = public.auth_roles.id"],
+        "relationships": [
+            "public.app_users.role_id = public.auth_roles.id",
+            "public.ai_tasks.created_by = public.app_users.id",
+        ],
     }
 
 
@@ -166,7 +182,7 @@ def validate_dynamic_sql(sql: str) -> tuple[str, list[str]]:
         table_aliases[table.alias_or_name.lower()] = name
         referenced_tables.append(f"public.{name}")
     if not referenced_tables:
-        raise DynamicSqlToolError("动态 SQL 必须查询已批准的平台用户表")
+        raise DynamicSqlToolError("动态 SQL 必须查询已批准的平台运维表")
     if len(referenced_tables) > 4:
         raise DynamicSqlToolError("动态 SQL 引用的真实表次数过多")
 

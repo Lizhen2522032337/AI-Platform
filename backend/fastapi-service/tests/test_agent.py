@@ -142,6 +142,7 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
         ("整理当前所有用户", "platform_data_query"),
         ("查询禁用账号", "platform_data_query"),
         ("统计各个角色有多少用户", "platform_data_query"),
+        ("整理当前所有任务，导出 Excel", "platform_data_query"),
         ("生成今天的生产日报", "report_generation"),
         ("分析设备停机原因", "incident_analysis"),
     ],
@@ -229,12 +230,27 @@ def test_dynamic_sql_accepts_safe_aggregate_and_cte() -> None:
     assert "WITH active" in cte
 
 
+def test_dynamic_sql_accepts_admin_task_list() -> None:
+    normalized, tables = validate_dynamic_sql(
+        """
+        SELECT t.id AS task_id, t.prompt, t.status, t.model_provider,
+               u.username AS created_by_username, t.created_at
+        FROM public.ai_tasks AS t
+        LEFT JOIN public.app_users AS u ON u.id = t.created_by
+        ORDER BY t.created_at DESC
+        """
+    )
+
+    assert "answer" not in normalized
+    assert tables == ["public.ai_tasks", "public.app_users"]
+
+
 @pytest.mark.parametrize(
     "sql",
     [
         "SELECT * FROM public.app_users",
         "SELECT password_hash FROM public.app_users",
-        "SELECT id FROM public.ai_tasks",
+        "SELECT answer FROM public.ai_tasks",
         "SELECT id FROM app_users",
         "SELECT pg_read_file('/etc/passwd') FROM public.app_users",
         "SELECT pg_sleep(10) FROM public.app_users",
@@ -380,6 +396,43 @@ def test_platform_planner_supplies_safe_query_when_model_omits_it(monkeypatch) -
     normalized, tables = validate_dynamic_sql(plan.dynamic_query.sql)
     assert "password_hash" not in normalized
     assert tables == ["public.app_users", "public.auth_roles"]
+
+
+def test_platform_task_planner_supplies_safe_query_when_model_omits_it(
+    monkeypatch,
+) -> None:
+    async def fake_complete_json(_provider, _system_prompt, _user_prompt):
+        return {
+            "intent": "platform_data_query",
+            "objective": "整理当前所有任务并导出 Excel",
+            "knowledge_query": "平台任务",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": None,
+            "report_required": False,
+            "report_title": "平台任务清单",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    plan = asyncio.run(
+        planners.create_plan(
+            "platform_data_query",
+            "整理当前所有任务并导出 Excel",
+            "deepseek",
+            [{"role": "user", "content": "整理当前所有任务并导出 Excel"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=True,
+        )
+    )
+
+    assert plan.report_required is True
+    assert plan.dynamic_query is not None
+    normalized, tables = validate_dynamic_sql(plan.dynamic_query.sql)
+    assert "answer" not in normalized
+    assert tables == ["public.ai_tasks", "public.app_users"]
 
 
 def test_platform_planner_forces_report_files_when_user_requests_excel(monkeypatch) -> None:

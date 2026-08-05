@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     agent_enabled: bool = True
     agent_max_queries: int = 6
     agent_max_evidence_chars: int = 24000
-    # 动态 SQL 第一阶段只允许管理员查询内置平台用户白名单。
+    # 动态 SQL 只允许管理员查询内置平台任务、用户和角色的非敏感白名单字段。
     dynamic_sql_enabled: bool = True
     dynamic_sql_max_rows: int = 200
 
