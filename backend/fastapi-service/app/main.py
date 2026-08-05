@@ -297,11 +297,15 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 preparation.plan.report_title,
                 answer,
                 preparation.observations,
+                output_formats=preparation.plan.export_formats,
             )
             report_step = {
                 **report_step,
                 "status": "completed",
-                "detail": f"已生成 {len(artifacts)} 个报告文件",
+                "detail": (
+                    f"已按请求生成 {len(artifacts)} 个报告文件"
+                    f"（{', '.join(preparation.plan.export_formats)}）"
+                ),
                 "durationMs": round((time.perf_counter() - report_started) * 1000),
             }
             merge_trace_step(execution_trace, report_step)
@@ -363,6 +367,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 "intent": preparation.intent if preparation else "direct_chat",
                 "databaseType": payload.database_type,
                 "reportRequired": preparation.plan.report_required if preparation else False,
+                "exportFormats": preparation.plan.export_formats if preparation else [],
                 "notificationSent": notification_sent,
             },
             execution_trace,

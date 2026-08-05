@@ -12,7 +12,13 @@ from app.agent.dynamic_sql_tool import (
     planner_schema,
     validate_dynamic_sql,
 )
-from app.agent.types import AgentIntent, AgentPlan, DatabaseType, DynamicSqlQuery
+from app.agent.types import (
+    AgentIntent,
+    AgentPlan,
+    DatabaseType,
+    DynamicSqlQuery,
+    ExportFormat,
+)
 from app.config.settings import Settings, get_settings
 from app.llm import LlmProviderError, ModelProvider, complete_json
 
@@ -23,6 +29,14 @@ _NOTIFY_WORDS = ("通知", "发送", "推送", "告警")
 _PLATFORM_USER_WORDS = ("用户", "账号", "账户", "角色", "权限")
 _PLATFORM_TASK_WORDS = ("任务",)
 _PLATFORM_QUERY_WORDS = ("整理", "列出", "查询", "查看", "统计", "汇总", "筛选", "多少")
+_DEFAULT_EXPORT_FORMATS: list[ExportFormat] = [
+    "md",
+    "docx",
+    "pdf",
+    "xlsx",
+    "json",
+    "csv",
+]
 _DEFAULT_PLATFORM_USERS_SQL = """
 SELECT u.id, u.username, u.display_name, r.code AS role_code,
        r.name AS role_name, u.is_active, u.last_login_at,
@@ -62,6 +76,25 @@ def _history_text(messages: list[dict[str, str]]) -> str:
     return "\n".join(parts)[-8000:]
 
 
+def requested_export_formats(prompt: str) -> list[ExportFormat]:
+    """确定性提取用户明确指定的文件格式，避免模型擅自扩大导出范围。"""
+
+    text = prompt.lower()
+    formats: list[ExportFormat] = []
+    markers: tuple[tuple[ExportFormat, tuple[str, ...]], ...] = (
+        ("xlsx", ("excel", "xlsx", "xls")),
+        ("docx", ("word", "docx", "doc")),
+        ("pdf", ("pdf",)),
+        ("md", ("markdown", ".md")),
+        ("json", ("json",)),
+        ("csv", ("csv",)),
+    )
+    for export_format, aliases in markers:
+        if any(alias in text for alias in aliases):
+            formats.append(export_format)
+    return formats
+
+
 def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
     if intent == "platform_data_query":
         is_task_query = any(word in prompt for word in _PLATFORM_TASK_WORDS)
@@ -98,7 +131,8 @@ def _system_prompt(
 knowledge_query 必须把多轮对话中的指代改写为可独立检索 Dify 的中文问题，最多250字。
 只返回一个 JSON 对象，不要 Markdown、解释或代码块。JSON 字段必须是：
 intent, objective, knowledge_query, hypotheses, queries, dynamic_query,
-report_required, report_title, notify。queries 每项包含 query_id, purpose, parameters。
+report_required, report_title, export_formats, notify。export_formats 只能包含
+md、docx、pdf、xlsx、json、csv；queries 每项包含 query_id, purpose, parameters。
 """.strip()
     dialect = (
         "当前数据源是 PostgreSQL；只选择目录中带 PostgreSQL 方言的查询。"
@@ -226,6 +260,14 @@ async def create_plan(
     ):
         # 平台数据查询优先于报表意图分流；显式要求导出时仍必须生成产物。
         plan.report_required = True
+    explicit_formats = requested_export_formats(prompt)
+    if explicit_formats:
+        # 用户明确指定格式时，确定性规则优先于模型，绝不额外生成其他文件。
+        plan.export_formats = explicit_formats
+    elif plan.report_required:
+        plan.export_formats = plan.export_formats or list(_DEFAULT_EXPORT_FORMATS)
+    else:
+        plan.export_formats = []
     # 通知属于外部副作用：用户请求、服务开关和自动发送开关三者必须同时满足。
     explicitly_requested = any(word in prompt for word in _NOTIFY_WORDS)
     plan.notify = bool(

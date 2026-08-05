@@ -12,6 +12,7 @@ AgentIntent = Literal[
     "platform_data_query",
 ]
 DatabaseType = Literal["postgresql", "db2"]
+ExportFormat = Literal["md", "docx", "pdf", "xlsx", "json", "csv"]
 
 
 class PlannedQuery(BaseModel):
@@ -40,6 +41,7 @@ class AgentPlan(BaseModel):
     dynamic_query: DynamicSqlQuery | None = None
     report_required: bool = False
     report_title: str = Field(default="生产问题分析", max_length=200)
+    export_formats: list[ExportFormat] = Field(default_factory=list, max_length=6)
     notify: bool = False
 
 

@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.agent.types import ExportFormat
 from app.config.settings import Settings, get_settings
 from app.integrations import save_file
 
@@ -543,8 +544,9 @@ def create_report_files(
     markdown: str,
     observations: list[dict[str, Any]],
     settings: Settings | None = None,
+    output_formats: list[ExportFormat] | None = None,
 ) -> list[dict[str, object]]:
-    """把最终报告及其数据证据保存到现有 MinIO 的任务目录。"""
+    """按用户请求的格式，把报告及数据证据保存到 MinIO。"""
 
     current = settings or get_settings()
     if not current.report_files_enabled:
@@ -554,61 +556,80 @@ def create_report_files(
     markdown_body = f"# {title}\n\n{markdown.strip()}\n"
     data_sets = _data_observations(observations)
 
-    report_files = [
-        (
-            "分析报告.md",
-            "report",
-            f"{prefix}/report.md",
-            markdown_body.encode("utf-8"),
-            "text/markdown; charset=utf-8",
-        ),
-        (
-            "分析报告.docx",
-            "report",
-            f"{prefix}/report.docx",
-            _docx_payload(title, markdown),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-        (
-            "分析报告.pdf",
-            "report",
-            f"{prefix}/report.pdf",
-            _pdf_payload(title, markdown),
-            "application/pdf",
-        ),
-        (
-            "数据报告.xlsx",
-            "query_workbook",
-            f"{prefix}/report.xlsx",
-            _xlsx_payload(title, markdown, data_sets),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ),
-    ]
+    # None 兼容旧调用并生成全套格式；显式列表则严格按所选格式生成。
+    selected_formats = set(
+        output_formats
+        if output_formats is not None
+        else ["md", "docx", "pdf", "xlsx", "json", "csv"]
+    )
+    report_files: list[tuple[str, str, str, bytes, str]] = []
+    if "md" in selected_formats:
+        report_files.append(
+            (
+                "分析报告.md",
+                "report",
+                f"{prefix}/report.md",
+                markdown_body.encode("utf-8"),
+                "text/markdown; charset=utf-8",
+            )
+        )
+    if "docx" in selected_formats:
+        report_files.append(
+            (
+                "分析报告.docx",
+                "report",
+                f"{prefix}/report.docx",
+                _docx_payload(title, markdown),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        )
+    if "pdf" in selected_formats:
+        report_files.append(
+            (
+                "分析报告.pdf",
+                "report",
+                f"{prefix}/report.pdf",
+                _pdf_payload(title, markdown),
+                "application/pdf",
+            )
+        )
+    if "xlsx" in selected_formats:
+        report_files.append(
+            (
+                "数据报告.xlsx",
+                "query_workbook",
+                f"{prefix}/report.xlsx",
+                _xlsx_payload(title, markdown, data_sets),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        )
     for name, kind, object_key, payload, content_type in report_files:
         stored = save_file(object_key, payload, content_type)
         artifacts.append({"name": name, "kind": kind, **stored})
 
-    evidence_body = json.dumps(
-        {"taskId": task_id, "observations": observations},
-        ensure_ascii=False,
-        indent=2,
-        default=str,
-    ).encode("utf-8")
-    evidence = save_file(
-        f"{prefix}/evidence.json",
-        evidence_body,
-        "application/json",
-    )
-    artifacts.append({"name": "证据清单.json", "kind": "evidence", **evidence})
+    if "json" in selected_formats:
+        evidence_body = json.dumps(
+            {"taskId": task_id, "observations": observations},
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ).encode("utf-8")
+        evidence = save_file(
+            f"{prefix}/evidence.json",
+            evidence_body,
+            "application/json",
+        )
+        artifacts.append({"name": "证据清单.json", "kind": "evidence", **evidence})
 
-    for data_name, columns, rows in data_sets:
-        csv_file = save_file(
-            f"{prefix}/{data_name}.csv",
-            _csv_payload(rows, columns),
-            "text/csv; charset=utf-8",
-        )
-        artifacts.append(
-            {"name": f"{data_name}.csv", "kind": "query_data", **csv_file}
-        )
+    if "csv" in selected_formats:
+        for data_name, columns, rows in data_sets:
+            csv_file = save_file(
+                f"{prefix}/{data_name}.csv",
+                _csv_payload(rows, columns),
+                "text/csv; charset=utf-8",
+            )
+            artifacts.append(
+                {"name": f"{data_name}.csv", "kind": "query_data", **csv_file}
+            )
     logger.info("Agent report files created: task_id=%s files=%d", task_id, len(artifacts))
     return artifacts

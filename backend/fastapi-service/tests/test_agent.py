@@ -88,6 +88,35 @@ def test_report_file_tool_creates_office_pdf_json_and_dynamic_sql_csv(monkeypatc
     assert b"observations" in stored_by_key["tasks/9/evidence.json"]
 
 
+def test_report_file_tool_only_creates_requested_excel(monkeypatch) -> None:
+    stored = []
+
+    def fake_save_file(object_key, payload, content_type):
+        stored.append((object_key, payload, content_type))
+        return {"objectKey": object_key, "contentType": content_type, "size": len(payload)}
+
+    monkeypatch.setattr("app.agent.report_tools.save_file", fake_save_file)
+    artifacts = create_report_files(
+        10,
+        "用户清单",
+        "## 清单\n共 2 条记录。",
+        [
+            {
+                "tool": "dynamic_sql",
+                "status": "ok",
+                "columns": ["username"],
+                "rows": [{"username": "admin"}, {"username": "user"}],
+            }
+        ],
+        settings(report_files_enabled=True),
+        output_formats=["xlsx"],
+    )
+
+    assert [artifact["name"] for artifact in artifacts] == ["数据报告.xlsx"]
+    assert [object_key for object_key, _, _ in stored] == ["tasks/10/report.xlsx"]
+    assert zipfile.is_zipfile(io.BytesIO(stored[0][1]))
+
+
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
     trace_steps = []
 
@@ -149,6 +178,22 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
 )
 def test_supervisor_routes_platform_user_queries(prompt: str, expected: str) -> None:
     assert planners.choose_intent(prompt) == expected
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("整理所有用户，导出 Excel", ["xlsx"]),
+        ("导出 Word 和 PDF", ["docx", "pdf"]),
+        ("下载 CSV 和 JSON", ["json", "csv"]),
+        ("生成一份分析报告", []),
+    ],
+)
+def test_requested_export_formats_are_deterministic(
+    prompt: str,
+    expected: list[str],
+) -> None:
+    assert planners.requested_export_formats(prompt) == expected
 
 
 def test_catalog_query_model_allows_parameterized_select() -> None:
@@ -430,6 +475,7 @@ def test_platform_task_planner_supplies_safe_query_when_model_omits_it(
 
     assert plan.report_required is True
     assert plan.dynamic_query is not None
+    assert plan.export_formats == ["xlsx"]
     normalized, tables = validate_dynamic_sql(plan.dynamic_query.sql)
     assert "answer" not in normalized
     assert tables == ["public.ai_tasks", "public.app_users"]
@@ -465,6 +511,7 @@ def test_platform_planner_forces_report_files_when_user_requests_excel(monkeypat
 
     assert plan.report_required is True
     assert plan.dynamic_query is not None
+    assert plan.export_formats == ["xlsx"]
 
 
 def test_platform_planner_replaces_unsafe_model_sql(monkeypatch) -> None:

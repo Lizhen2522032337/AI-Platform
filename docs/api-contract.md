@@ -91,7 +91,8 @@
 任务完成后，`result.artifacts` 会列出可下载文件。前端使用数组下标作为
 `artifactIndex` 调用下载接口；NestJS 会先校验任务归属和对象路径，再从内部
 FastAPI/MinIO 读取文件，浏览器不会接触 MinIO 地址或凭据。新生成的报表支持
-Markdown、Word、PDF、Excel、JSON，以及每个数据库结果对应的 CSV。
+Markdown、Word、PDF、Excel、JSON，以及每个数据库结果对应的 CSV；用户明确指定
+格式时只生成所选文件，未指定格式时才使用 Planner 的默认集合。
 
 创建会话：
 
@@ -185,7 +186,7 @@ Authorization: Bearer {DIFY_API_KEY}
 
 `trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，跳过无关的 Dify 知识检索，并使用 `platform_data_renderer` 将已校验行确定性渲染为 Markdown 表格。
 
-FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成时，Worker 会用完整 `answer` 覆盖 Redis 中的 `partialText`，避免节流中的最后一段未刷新到前端。任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务会把 Markdown、Word、PDF、Excel、证据 JSON 和数据库查询 CSV 写入 MinIO；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
+FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成时，Worker 会用完整 `answer` 覆盖 Redis 中的 `partialText`，避免节流中的最后一段未刷新到前端。任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务严格按用户明确指定的格式写入 MinIO，未指定格式时才使用默认格式集合；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
 
 ### 2.2 RabbitMQ 消息
 
