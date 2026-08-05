@@ -35,5 +35,6 @@ React -> Nginx -> Gin realtime -> Redis
 - [接口契约](docs/api-contract.md)
 - [登录认证与角色权限](docs/authentication-rbac.md)
 - [首次手动部署与更新脚本](docs/deployment-scripts.md)
+- [企业级构建、发布与回滚](docs/enterprise-deployment.md)
 
 部署约束：Windows 家庭版不运行 Docker；所有镜像构建和容器运行均位于 Linux 虚拟机 `192.168.86.133`。真实配置固定保存在仓库外的 `/etc/enterprise-ai-platform`，大模型和 Dify Key 单独保存在 `llm.env` 且只注入 FastAPI。

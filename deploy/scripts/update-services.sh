@@ -30,6 +30,7 @@ main() {
     ensure_database_env
     ensure_platform_env
     compose config --quiet
+    run_preflight
 
     for service in "${requested_services[@]}"; do
         validate_service "${service}"
@@ -72,6 +73,7 @@ main() {
     for service in "${requested_services[@]}"; do
         verify_service "${service}"
     done
+    record_successful_release "components:$(IFS=,; printf '%s' "${requested_services[*]}")"
 }
 
 main "$@"

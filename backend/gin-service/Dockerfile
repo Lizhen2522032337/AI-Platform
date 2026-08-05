@@ -1,24 +1,38 @@
-FROM golang:1.26-alpine AS build
+# syntax=docker/dockerfile:1.7
 
+ARG GO_BASE_IMAGE=golang:1.26-alpine
+ARG ALPINE_BASE_IMAGE=alpine:latest
+FROM ${GO_BASE_IMAGE} AS build
+
+ENV GOPROXY=https://goproxy.cn,direct \
+    GOTOOLCHAIN=local
 WORKDIR /app
 
-# 先复制依赖清单，以便充分利用 Docker 构建缓存。
 COPY go.mod go.sum ./
-ENV GOPROXY=https://goproxy.cn,direct
-RUN go mod download
+RUN --mount=type=cache,id=enterprise-ai-platform-go126-mod,target=/go/pkg/mod,sharing=locked \
+    go mod download
 
-# 编译不依赖 CGO 的 Linux 可执行文件。
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server .
+RUN --mount=type=cache,id=enterprise-ai-platform-go126-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=enterprise-ai-platform-go126-build,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o /out/server .
 
-FROM alpine
+FROM ${ALPINE_BASE_IMAGE} AS runtime
+
+ARG APP_VERSION=local
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Enterprise AI Gin" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app app
 
 WORKDIR /app
+COPY --from=build --chown=10001:10001 /out/server ./server
 
-# HTTPS/时区证书由基础包提供；健康检查使用 BusyBox wget。
-RUN apk add --no-cache ca-certificates
-
-COPY --from=build /app/server ./
+USER 10001:10001
 
 EXPOSE 8080
 

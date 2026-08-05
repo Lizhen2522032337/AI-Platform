@@ -13,6 +13,7 @@ main() {
     ensure_docker_compose
     ensure_database_env
     ensure_platform_env
+    run_preflight
     start_database_if_managed
     start_infrastructure
     run_migrations
@@ -27,6 +28,7 @@ main() {
     compose restart nginx
     wait_for_healthy nginx
     "${SCRIPT_DIR}/verify.sh"
+    record_successful_release full
 }
 
 main "$@"

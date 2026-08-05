@@ -3,3 +3,5 @@ dist
 coverage
 .git
 npm-debug.log*
+.env
+.env.*

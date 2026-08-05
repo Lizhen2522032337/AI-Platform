@@ -1,19 +1,34 @@
-FROM python:3.13-slim
+# syntax=docker/dockerfile:1.7
+
+# 基础镜像由 Compose 注入；生产环境可在仓库外的 base-images.env 中固定到 digest。
+ARG PYTHON_BASE_IMAGE=python:3.13-slim
+FROM ${PYTHON_BASE_IMAGE}
+
+ARG APP_VERSION=local
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Enterprise AI FastAPI" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# 先安装 Python 依赖，以便业务代码变化时直接复用整个依赖层。
-# 两个 BuildKit 缓存都保存在虚拟机的 Docker 构建缓存中，不进入最终镜像：
-# - pip-cache 保存索引响应和 pip 自身下载缓存；
-# - wheelhouse 明确保留已经下载的 wheel，requirements 变化时只补齐缺失版本。
-COPY requirements.txt ./
-RUN --mount=type=cache,id=enterprise-ai-platform-fastapi-pip,target=/root/.cache/pip,sharing=locked \
-    --mount=type=cache,id=enterprise-ai-platform-fastapi-wheelhouse,target=/opt/pip-wheelhouse,sharing=locked \
-    pip download --dest /opt/pip-wheelhouse -r requirements.txt \
-    && pip install --no-index --find-links=/opt/pip-wheelhouse -r requirements.txt
+# requirements.txt 是人工维护的依赖入口；requirements.lock 是生产构建使用的精确哈希锁。
+# wheelhouse 和 pip 下载缓存保存在 BuildKit 公共缓存中，代码变化不会重新下载依赖。
+COPY requirements.txt requirements.lock ./
+RUN --mount=type=cache,id=enterprise-ai-platform-python313-pip,target=/root/.cache/pip,sharing=locked \
+    --mount=type=cache,id=enterprise-ai-platform-python313-wheelhouse,target=/opt/pip-wheelhouse,sharing=locked \
+    pip download --require-hashes --dest /opt/pip-wheelhouse -r requirements.lock \
+    && pip install --no-index --require-hashes --find-links=/opt/pip-wheelhouse -r requirements.lock \
+    && groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
 
-# 复制应用代码并启动 FastAPI 服务。
-COPY . .
+COPY --chown=app:app . .
+
+USER 10001:10001
 
 EXPOSE 8000
 

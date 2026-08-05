@@ -1,14 +1,36 @@
-FROM node:22-alpine
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_BASE_IMAGE=node:22-alpine
+FROM ${NODE_BASE_IMAGE} AS build
 
 WORKDIR /app
 
-# 先安装依赖，以便充分利用 Docker 构建缓存。
+# npm 下载缓存由前端和 NestJS 共享；node_modules 仍按各自 lock 文件独立生成。
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,id=enterprise-ai-platform-node22-npm,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline --no-audit
 
-# 编译并启动 NestJS 服务。
 COPY . .
-RUN npm run build
+RUN npm run build \
+    && npm prune --omit=dev
+
+ARG NODE_BASE_IMAGE=node:22-alpine
+FROM ${NODE_BASE_IMAGE} AS runtime
+
+ARG APP_VERSION=local
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Enterprise AI NestJS" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
+ENV NODE_ENV=production
+WORKDIR /app
+
+COPY --from=build --chown=node:node /app/package*.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
+
+USER node
 
 EXPOSE 3000
 

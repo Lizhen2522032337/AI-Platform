@@ -3,7 +3,7 @@ name: enterprise-ai-platform
 services:
   # PostgreSQL 可以由本项目托管，也可以通过 database.env 切换为外部数据库。
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     profiles: ["managed-db"]
     restart: unless-stopped
     ports:
@@ -20,7 +20,7 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -37,7 +37,7 @@ services:
       start_period: 5s
 
   rabbitmq:
-    image: rabbitmq:4.3.4-management-alpine
+    image: ${RABBITMQ_IMAGE:-rabbitmq:4.3.4-management-alpine}
     restart: unless-stopped
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
@@ -51,7 +51,7 @@ services:
       start_period: 20s
 
   qdrant:
-    image: qdrant/qdrant:v1.18.3
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.3}
     restart: unless-stopped
     volumes:
       - qdrant_data:/qdrant/storage
@@ -59,7 +59,7 @@ services:
       - "6333"
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1}
     restart: unless-stopped
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
@@ -71,7 +71,7 @@ services:
 
   # 一次性创建 AI 结果桶，完成后正常退出。
   minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
+    image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1}
     profiles: ["tools"]
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
@@ -90,7 +90,7 @@ services:
 
   # 一次性执行所有幂等 SQL 迁移。
   migrator:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     profiles: ["tools"]
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
@@ -122,10 +122,20 @@ services:
         done
 
   frontend:
+    image: ${APP_IMAGE_REGISTRY:-enterprise-ai-platform}/frontend:${APP_IMAGE_TAG:-local}
     build:
       context: ../frontend
       dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:22-alpine}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-nginx:alpine}
+        APP_VERSION: ${APP_IMAGE_TAG:-local}
+        VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
     expose:
       - "80"
     healthcheck:
@@ -136,10 +146,21 @@ services:
       start_period: 10s
 
   fastapi-service:
+    image: ${APP_IMAGE_REGISTRY:-enterprise-ai-platform}/fastapi-service:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend/fastapi-service
       dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_FASTAPI_BASE_IMAGE:-python:3.13-slim}
+        APP_VERSION: ${APP_IMAGE_TAG:-local}
+        VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     env_file:
       # PostgreSQL 查询 Tool 复用 Git 外 database.env，不在仓库重复保存密码。
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
@@ -169,10 +190,21 @@ services:
       start_period: 20s
 
   nest-service:
+    image: ${APP_IMAGE_REGISTRY:-enterprise-ai-platform}/nest-service:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend/nest-service
       dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:22-alpine}
+        APP_VERSION: ${APP_IMAGE_TAG:-local}
+        VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
@@ -195,10 +227,22 @@ services:
       start_period: 30s
 
   gin-service:
+    image: ${APP_IMAGE_REGISTRY:-enterprise-ai-platform}/gin-service:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend/gin-service
       dockerfile: Dockerfile
+      args:
+        GO_BASE_IMAGE: ${GO_BASE_IMAGE:-golang:1.26-alpine}
+        ALPINE_BASE_IMAGE: ${ALPINE_BASE_IMAGE:-alpine:latest}
+        APP_VERSION: ${APP_IMAGE_TAG:-local}
+        VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     env_file:
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
     depends_on:
@@ -214,10 +258,21 @@ services:
       start_period: 15s
 
   worker:
+    image: ${APP_IMAGE_REGISTRY:-enterprise-ai-platform}/worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend/worker
       dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_WORKER_BASE_IMAGE:-python:3.11-slim}
+        APP_VERSION: ${APP_IMAGE_TAG:-local}
+        VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     env_file:
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
@@ -240,7 +295,7 @@ services:
       start_period: 20s
 
   nginx:
-    image: nginx:alpine
+    image: ${NGINX_BASE_IMAGE:-nginx:alpine}
     restart: unless-stopped
     depends_on:
       frontend:

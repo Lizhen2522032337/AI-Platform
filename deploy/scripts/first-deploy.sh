@@ -14,6 +14,7 @@ main() {
     ensure_platform_env
     acquire_deploy_lock
     compose config --quiet
+    run_preflight
 
     # 第一阶段：准备数据库结构。external 模式不会启动本项目的数据库容器。
     start_database_if_managed
@@ -34,6 +35,7 @@ main() {
     compose up -d nginx
     wait_for_healthy nginx
     "${SCRIPT_DIR}/verify.sh"
+    record_successful_release full
     warn '若尚未创建管理员，请执行：bash ./deploy/scripts/create-admin.sh'
     log "首次完整部署完成，当前提交：$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 }

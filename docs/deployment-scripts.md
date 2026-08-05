@@ -15,6 +15,10 @@
 | Agent/DB2/通知配置 | `/etc/enterprise-ai-platform/agent.env` |
 | PostgreSQL/DB2业务与批准查询目录 | `/etc/enterprise-ai-platform/database-catalog.json` |
 | 部署分支和数据库模式 | `/etc/enterprise-ai-platform/deploy.env` |
+| 基础镜像不可变 digest | `/etc/enterprise-ai-platform/base-images.env` |
+
+企业发布、公共依赖缓存、Git 版本镜像和无重建回滚的完整说明见
+[企业级构建、发布与回滚](enterprise-deployment.md)。
 
 启动顺序：
 
@@ -211,6 +215,8 @@ DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
 PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
 LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
 AGENT_ENV_FILE=/etc/enterprise-ai-platform/agent.env
+BASE_IMAGES_FILE=/etc/enterprise-ai-platform/base-images.env
+APP_IMAGE_REGISTRY=enterprise-ai-platform
 ```
 
 `managed` 表示 Compose 负责运行 PostgreSQL。以后使用外部数据库时改为 `external`。
@@ -260,14 +266,18 @@ vi /etc/enterprise-ai-platform/database-catalog.json
 
 ```bash
 cd /opt/enterprise-ai-platform
-export DATABASE_ENV_FILE=/etc/enterprise-ai-platform/database.env
-export PLATFORM_ENV_FILE=/etc/enterprise-ai-platform/platform.env
-export LLM_ENV_FILE=/etc/enterprise-ai-platform/llm.env
-export AGENT_ENV_FILE=/etc/enterprise-ai-platform/agent.env
+bash ./deploy/scripts/pin-base-images.sh
+set -a
+source /etc/enterprise-ai-platform/deploy.env
+source /etc/enterprise-ai-platform/base-images.env
+set +a
+export APP_IMAGE_TAG="$(git rev-parse --short=12 HEAD)"
 docker compose -f deploy/docker-compose.yml --profile managed-db config --quiet
+bash ./deploy/scripts/preflight.sh
 ```
 
-没有输出即表示 Compose 基础语法通过。
+基础镜像锁只在首次部署和经过审批的运行环境升级时生成，不要在日常发布中重复执行。
+检查脚本通过即表示 Compose、仓库外配置、依赖锁、镜像 digest、BuildKit 和磁盘空间满足要求。
 
 ### 第 3 步：启动数据和中间件
 
@@ -308,19 +318,15 @@ docker compose -f deploy/docker-compose.yml --profile managed-db build --pull \
   frontend nest-service fastapi-service gin-service worker
 ```
 
-第一次会下载 Node.js、Python、Go 和各语言依赖，耗时较长。
+第一次会下载 Node.js、Python、Go 和各语言依赖，耗时较长。后续构建会复用：
 
-FastAPI 使用三级增量缓存：
+1. Python 3.13 和 Python 3.11 各自独立的 pip/wheelhouse 缓存。
+2. NestJS 与前端共享的 npm 下载缓存，但两者仍使用各自的 `package-lock.json`。
+3. Gin 的 Go module 和编译缓存。
+4. Dockerfile 中按依赖锁文件分层的完整依赖层。
 
-1. `requirements.txt` 未变化时，Docker 直接复用完整 Python 依赖层，不再次执行 pip。
-2. `requirements.txt` 变化导致依赖层重建时，BuildKit 先复用 pip 的索引和下载缓存。
-3. 持久 wheelhouse 保留已经下载的 `.whl`；`pip download` 只补齐缺失或新版本文件，
-   随后的 `pip install --no-index` 只从本地 wheelhouse 安装，不再连接软件源。
-
-Python 大版本、基础镜像摘要或 `requirements.txt` 变化时，仍会重新创建依赖层；
-安装步骤仍需把 wheel 解包到新镜像，但无需重复下载已有的兼容 wheel。这样既保证
-镜像不可变和二进制扩展与 Python ABI 一致，也能显著减少网络耗时。不要在运行中的
-容器内直接执行 `pip install`，否则容器重建后改动会丢失。
+Python 生产镜像只从 `requirements.lock` 安装，并校验每个分发包的 SHA-256。不要在
+运行中的容器内直接安装依赖，否则容器重建后改动会丢失，也无法审计实际运行版本。
 
 ### 第 6 步：启动应用，但暂不启动 Nginx
 
@@ -505,7 +511,10 @@ bash ./deploy/scripts/rollback.sh
 bash ./deploy/scripts/rollback.sh <commit-id>
 ```
 
-回滚只处理代码和应用镜像，不回滚 PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 数据。跨越本次架构重构之前的提交不兼容，应从本架构第一个稳定提交开始作为回滚基线。
+回滚只处理代码和应用镜像，不回滚 PostgreSQL、Redis、RabbitMQ、Qdrant、MinIO 数据。
+脚本只允许使用已经存在的五个 Commit 版本镜像，并通过 `--no-build` 切换；缺少任何镜像都会
+停止，不会在故障期间重新下载依赖或构建旧代码。跨越本次架构重构之前的提交不兼容，应从
+本架构第一个完整发布开始作为回滚基线。
 
 严禁执行：
 

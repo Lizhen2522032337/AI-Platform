@@ -23,6 +23,7 @@ main() {
     ensure_database_env
     ensure_platform_env
     compose config --quiet
+    run_preflight
     start_database_if_managed
     start_infrastructure
     run_migrations
@@ -42,6 +43,7 @@ main() {
     verify_service gin-service
     verify_service nest-service
     verify_service worker
+    record_successful_release components:backends
     log '后端和 Worker 更新完成，前端容器未重建'
 }
 

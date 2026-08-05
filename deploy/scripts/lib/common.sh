@@ -16,6 +16,7 @@ if [[ -f "${DEPLOY_CONFIG_FILE}" ]]; then
 fi
 
 readonly COMPOSE_FILE="${REPO_ROOT}/deploy/docker-compose.yml"
+readonly BASE_IMAGES_FILE="${BASE_IMAGES_FILE:-/etc/enterprise-ai-platform/base-images.env}"
 readonly DATABASE_ENV_FILE="${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}"
 readonly PLATFORM_ENV_FILE="${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}"
 readonly LLM_ENV_FILE="${LLM_ENV_FILE:-/etc/enterprise-ai-platform/llm.env}"
@@ -23,6 +24,7 @@ readonly AGENT_ENV_FILE="${AGENT_ENV_FILE:-/etc/enterprise-ai-platform/agent.env
 readonly DATABASE_MODE="${DATABASE_MODE:-managed}"
 readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
 readonly DEPLOY_LOCK_DIR="${DEPLOY_STATE_DIR}/deploy.lock"
+readonly APP_IMAGE_REGISTRY="${APP_IMAGE_REGISTRY:-enterprise-ai-platform}"
 readonly -a INFRASTRUCTURE_SERVICES=(redis rabbitmq qdrant minio)
 readonly -a APPLICATION_SERVICES=(frontend fastapi-service nest-service gin-service worker)
 readonly -a BACKEND_SERVICES=(fastapi-service nest-service gin-service worker)
@@ -30,7 +32,17 @@ readonly -a DATABASE_SERVICES=(nest-service worker)
 # FastAPI Dockerfile 使用 BuildKit cache mount 保存 pip 下载缓存。Compose v2 默认
 # 已启用 BuildKit；这里显式保留用户设置，并在未设置时启用。
 DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
-export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE DOCKER_BUILDKIT
+
+# 基础镜像锁文件不包含密钥，可以由 pin-base-images.sh 在虚拟机上生成。
+# set -a 确保其中的镜像 digest 能传入 Docker Compose 的变量插值。
+if [[ -f "${BASE_IMAGES_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "${BASE_IMAGES_FILE}"
+    set +a
+fi
+export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE
+export DOCKER_BUILDKIT APP_IMAGE_REGISTRY BASE_IMAGES_FILE
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -61,6 +73,10 @@ ensure_docker_compose() {
     docker compose version >/dev/null 2>&1 || die '未安装 Docker Compose v2 插件'
     docker info >/dev/null 2>&1 \
         || die '当前用户无法连接 Docker；请检查 Docker 服务和 docker 用户组权限'
+}
+
+run_preflight() {
+    bash "${SCRIPT_DIR}/preflight.sh"
 }
 
 ensure_database_env() {
@@ -140,12 +156,22 @@ ensure_llm_env() {
     #     && die "${LLM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
 }
 
+release_tag() {
+    if [[ -n "${RELEASE_TAG_OVERRIDE:-}" ]]; then
+        printf '%s\n' "${RELEASE_TAG_OVERRIDE}"
+        return 0
+    fi
+    git -C "${REPO_ROOT}" rev-parse --short=12 HEAD
+}
+
 compose() {
+    local image_tag
+    image_tag="$(release_tag)"
     if [[ "${DATABASE_MODE}" == 'managed' ]]; then
         # 三个配置路径已在文件开头 export；不要在命令前重复赋值只读变量。
-        docker compose -f "${COMPOSE_FILE}" --profile managed-db "$@"
+        APP_IMAGE_TAG="${image_tag}" docker compose -f "${COMPOSE_FILE}" --profile managed-db "$@"
     else
-        docker compose -f "${COMPOSE_FILE}" "$@"
+        APP_IMAGE_TAG="${image_tag}" docker compose -f "${COMPOSE_FILE}" "$@"
     fi
 }
 
@@ -223,6 +249,47 @@ record_deploy_state() {
     mkdir -p "${DEPLOY_STATE_DIR}"
     printf '%s\n' "${commit}" >"${DEPLOY_STATE_DIR}/previous_commit"
     printf '%s\n' "${branch}" >"${DEPLOY_STATE_DIR}/production_branch"
+}
+
+record_successful_release() {
+    local scope="${1:-full}"
+    local commit tag timestamp current temp_file
+
+    commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+    tag="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)"
+    timestamp="$(date --iso-8601=seconds)"
+    mkdir -p "${DEPLOY_STATE_DIR}"
+
+    if [[ "${scope}" == 'full' ]]; then
+        if [[ -f "${DEPLOY_STATE_DIR}/current_release" ]]; then
+            current="$(<"${DEPLOY_STATE_DIR}/current_release")"
+            if [[ -n "${current}" && "${current}" != "${commit}" ]]; then
+                printf '%s\n' "${current}" >"${DEPLOY_STATE_DIR}/previous_release"
+            fi
+        fi
+        temp_file="$(mktemp "${DEPLOY_STATE_DIR}/current_release.XXXXXX")"
+        printf '%s\n' "${commit}" >"${temp_file}"
+        mv "${temp_file}" "${DEPLOY_STATE_DIR}/current_release"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "${timestamp}" "${scope}" "${commit}" "${tag}" \
+        >>"${DEPLOY_STATE_DIR}/release-history.tsv"
+    log "已记录发布版本：scope=${scope} commit=${commit} image_tag=${tag}"
+}
+
+application_image_ref() {
+    local service="$1"
+    local tag="${2:-$(release_tag)}"
+    printf '%s/%s:%s\n' "${APP_IMAGE_REGISTRY}" "${service}" "${tag}"
+}
+
+ensure_release_images() {
+    local tag="$1"
+    local service image_ref
+    for service in "${APPLICATION_SERVICES[@]}"; do
+        image_ref="$(application_image_ref "${service}" "${tag}")"
+        docker image inspect "${image_ref}" >/dev/null 2>&1 \
+            || die "缺少不可变回滚镜像：${image_ref}；禁止在回滚时现场重建"
+    done
 }
 
 pull_code() {
@@ -336,6 +403,7 @@ update_one_service() {
     ensure_database_env
     ensure_platform_env
     compose config --quiet
+    run_preflight
 
     if is_backend_service "${service}"; then
         start_infrastructure
@@ -360,4 +428,5 @@ update_one_service() {
 
     compose ps
     verify_service "${service}"
+    record_successful_release "component:${service}"
 }

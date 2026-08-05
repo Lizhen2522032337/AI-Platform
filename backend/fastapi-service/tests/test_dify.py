@@ -5,7 +5,6 @@ import json
 
 import httpx
 import pytest
-
 from app.config.settings import Settings
 from app.dify import DifyKnowledgeError, _format_records, retrieve_knowledge
 

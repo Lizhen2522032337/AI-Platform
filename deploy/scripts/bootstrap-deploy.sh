@@ -10,7 +10,9 @@ readonly BRANCH="${1:-${DEPLOY_BRANCH:-agent/initial-project}}"
 readonly DATABASE_CONFIG="${DATABASE_ENV_FILE:-${CONFIG_DIR}/database.env}"
 readonly PLATFORM_CONFIG="${PLATFORM_ENV_FILE:-${CONFIG_DIR}/platform.env}"
 readonly LLM_CONFIG="${LLM_ENV_FILE:-${CONFIG_DIR}/llm.env}"
+readonly BASE_IMAGES_CONFIG="${BASE_IMAGES_FILE:-${CONFIG_DIR}/base-images.env}"
 readonly DATABASE_MODE_VALUE="${DATABASE_MODE:-managed}"
+readonly APP_IMAGE_REGISTRY_VALUE="${APP_IMAGE_REGISTRY:-enterprise-ai-platform}"
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -61,11 +63,16 @@ umask 077
     printf 'DATABASE_ENV_FILE=%q\n' "${DATABASE_CONFIG}"
     printf 'PLATFORM_ENV_FILE=%q\n' "${PLATFORM_CONFIG}"
     printf 'LLM_ENV_FILE=%q\n' "${LLM_CONFIG}"
+    printf 'BASE_IMAGES_FILE=%q\n' "${BASE_IMAGES_CONFIG}"
+    printf 'APP_IMAGE_REGISTRY=%q\n' "${APP_IMAGE_REGISTRY_VALUE}"
     printf 'DATABASE_MODE=%q\n' "${DATABASE_MODE_VALUE}"
 } >"${CONFIG_DIR}/deploy.env"
 
 log "克隆 ${BRANCH} 到 ${DEPLOY_DIR}"
 git clone --branch "${BRANCH}" --single-branch "${REPOSITORY_URL}" "${DEPLOY_DIR}"
+
+log '固定当前批准的基础镜像 digest'
+bash "${DEPLOY_DIR}/deploy/scripts/pin-base-images.sh"
 
 log '开始首次完整部署'
 exec "${DEPLOY_DIR}/deploy/scripts/first-deploy.sh"

@@ -45,6 +45,9 @@ release-output/
 *.tar
 *.tar.gz
 *.sha256
+# Python 依赖入口与 lock 的审计清单属于源码供应链文件，必须提交。
+!backend/fastapi-service/python-lock.manifest.sha256
+!backend/worker/python-lock.manifest.sha256
 
 # 编辑器异常退出产生的交换文件不应阻塞虚拟机部署。
 *.swp

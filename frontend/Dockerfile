@@ -1,16 +1,25 @@
-FROM node:22-alpine AS build
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_BASE_IMAGE=node:22-alpine
+ARG NGINX_BASE_IMAGE=nginx:alpine
+FROM ${NODE_BASE_IMAGE} AS build
 
 WORKDIR /app
 
-# 先安装依赖，以便充分利用 Docker 构建缓存。
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,id=enterprise-ai-platform-node22-npm,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline --no-audit
 
-# 构建 React 生产资源。
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
+FROM ${NGINX_BASE_IMAGE} AS runtime
+
+ARG APP_VERSION=local
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Enterprise AI Frontend" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 COPY --from=build /app/dist /usr/share/nginx/html
 

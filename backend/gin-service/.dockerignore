@@ -1,2 +1,4 @@
 server
 .git
+.env
+.env.*
