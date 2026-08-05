@@ -3,11 +3,10 @@
 import json
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
 from app import main
 from app.agent.graph import AgentPreparation
 from app.agent.types import AgentPlan
+from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
 
@@ -238,3 +237,34 @@ def test_delete_task_artifacts(monkeypatch) -> None:
     assert response.status_code == 204
     assert response.content == b""
     assert captured == [(7, "tasks/7/result.json"), (8, None)]
+
+
+def test_download_task_artifact_returns_private_file(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "read_file",
+        lambda object_key: (
+            b"workbook-bytes",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+    )
+
+    response = client.post(
+        "/artifacts/download",
+        json={"taskId": 7, "objectKey": "tasks/7/report.xlsx"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"workbook-bytes"
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+def test_download_task_artifact_rejects_cross_task_key() -> None:
+    response = client.post(
+        "/artifacts/download",
+        json={"taskId": 7, "objectKey": "tasks/8/report.xlsx"},
+    )
+
+    assert response.status_code == 422

@@ -6,7 +6,7 @@
 FastAPI 内部从固定问答流水线升级为受控 LangGraph Agent。第一阶段支持：
 
 1. 生产问题分析：根据 Dify 知识、批准的 PostgreSQL/DB2 查询和多轮对话形成原因分析。
-2. 报表生成：生成 Markdown 报告、证据 JSON 和每个数据库查询的 CSV，保存到 MinIO。
+2. 报表生成：生成 Markdown、Word、PDF、Excel 报告、证据 JSON 和每个数据库查询的 CSV，保存到 MinIO，并通过归属鉴权接口下载。
 3. 管理员平台数据整理：根据自然语言生成受限 PostgreSQL 查询，例如整理当前所有平台用户。
 
 用户可在前端按会话选择 PostgreSQL 或 DB2。DB2 未配置时 Agent 仍可使用 Dify 和大模型，但必须明确说明缺少生产数据，不能
@@ -151,8 +151,8 @@ SQL 示例：
 
 ## 6. 当前限制与后续阶段
 
-- 报告已经保存 MinIO，但前端下载链接需要新增 NestJS 鉴权下载接口。
-- 第一阶段生成 Markdown/JSON/CSV；PDF、Excel 图表需确定模板后增加渲染器。
+- 已支持通过 NestJS 归属鉴权接口下载 Markdown、Word、PDF、Excel、JSON 和 CSV；历史任务不会自动补生成新增格式。
+- 当前 Excel 以报告页和查询数据工作表为主，PDF/Word 采用标准业务报告样式；专用品牌模板和 Excel 图表仍需取得正式模板后扩展。
 - 当前任务恢复仍依赖 RabbitMQ/Worker；生产级断点恢复应增加 LangGraph PostgreSQL
   Checkpointer 和人工审批节点。
 - 当前查询按 Planner 顺序执行；取得真实业务目录后，可以使用 LangGraph `Send`

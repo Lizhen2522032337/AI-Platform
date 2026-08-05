@@ -1,10 +1,11 @@
 """LangGraph Agent 的目录校验、安全边界和文件 Tool 测试。"""
 
 import asyncio
+import io
+import zipfile
 from types import SimpleNamespace
 
 import pytest
-
 from app.agent import graph, planners
 from app.agent.catalog import CatalogQuery, QueryCatalog
 from app.agent.database_tool import _prepare_sql
@@ -18,6 +19,7 @@ from app.agent.report_tools import create_report_files
 from app.agent.types import AgentPlan, DynamicSqlQuery
 from app.config.settings import Settings
 from app.dify import KnowledgeResult
+from openpyxl import load_workbook
 
 
 def settings(**overrides) -> Settings:
@@ -51,7 +53,7 @@ def test_db2_tool_accepts_select_and_with() -> None:
     _assert_read_only_sql("WITH X AS (SELECT ID FROM PROD.STATE) SELECT ID FROM X")
 
 
-def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
+def test_report_file_tool_creates_office_pdf_json_and_dynamic_sql_csv(monkeypatch) -> None:
     stored = []
 
     def fake_save_file(object_key, payload, content_type):
@@ -65,19 +67,25 @@ def test_report_file_tool_creates_markdown_json_and_csv(monkeypatch) -> None:
         "## 摘要\n发现压力异常。",
         [
             {
-                "tool": "db2_query",
-                "queryId": "pressure_window",
+                "tool": "dynamic_sql",
                 "status": "ok",
-                "columns": ["TIME", "PRESSURE"],
-                "rows": [{"TIME": "2026-07-30 10:00:00", "PRESSURE": 2.1}],
+                "columns": ["username", "role_code"],
+                "rows": [{"username": "admin", "role_code": "admin"}],
             }
         ],
         settings(report_files_enabled=True),
     )
-    assert len(artifacts) == 3
-    assert stored[0][0] == "tasks/9/report.md"
-    assert stored[1][0] == "tasks/9/evidence.json"
-    assert stored[2][0] == "tasks/9/pressure_window.csv"
+    assert len(artifacts) == 6
+    stored_by_key = {object_key: payload for object_key, payload, _ in stored}
+    assert stored_by_key["tasks/9/report.md"].startswith(b"# ")
+    assert zipfile.is_zipfile(io.BytesIO(stored_by_key["tasks/9/report.docx"]))
+    assert stored_by_key["tasks/9/report.pdf"].startswith(b"%PDF")
+    assert zipfile.is_zipfile(io.BytesIO(stored_by_key["tasks/9/report.xlsx"]))
+    workbook = load_workbook(io.BytesIO(stored_by_key["tasks/9/report.xlsx"]))
+    assert workbook.sheetnames == ["报告", "platform_data"]
+    assert workbook["platform_data"]["A2"].value == "admin"
+    assert b"username" in stored_by_key["tasks/9/platform_data.csv"]
+    assert b"observations" in stored_by_key["tasks/9/evidence.json"]
 
 
 def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
@@ -372,6 +380,38 @@ def test_platform_planner_supplies_safe_query_when_model_omits_it(monkeypatch) -
     normalized, tables = validate_dynamic_sql(plan.dynamic_query.sql)
     assert "password_hash" not in normalized
     assert tables == ["public.app_users", "public.auth_roles"]
+
+
+def test_platform_planner_forces_report_files_when_user_requests_excel(monkeypatch) -> None:
+    async def fake_complete_json(_provider, _system_prompt, _user_prompt):
+        return {
+            "intent": "platform_data_query",
+            "objective": "整理当前所有用户并导出 Excel",
+            "knowledge_query": "平台用户",
+            "hypotheses": [],
+            "queries": [],
+            "dynamic_query": None,
+            "report_required": False,
+            "report_title": "平台用户清单",
+            "notify": False,
+        }
+
+    monkeypatch.setattr(planners, "complete_json", fake_complete_json)
+    plan = asyncio.run(
+        planners.create_plan(
+            "platform_data_query",
+            "整理当前所有用户并导出 Excel",
+            "deepseek",
+            [{"role": "user", "content": "整理当前所有用户并导出 Excel"}],
+            QueryCatalog(),
+            "postgresql",
+            settings(),
+            allow_dynamic_sql=True,
+        )
+    )
+
+    assert plan.report_required is True
+    assert plan.dynamic_query is not None
 
 
 def test_platform_planner_replaces_unsafe_model_sql(monkeypatch) -> None:

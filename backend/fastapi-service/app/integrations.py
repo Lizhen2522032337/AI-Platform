@@ -7,6 +7,7 @@ import logging
 from functools import lru_cache
 
 from minio import Minio
+from minio.error import S3Error
 from qdrant_client import QdrantClient, models
 
 from app.config.settings import get_settings
@@ -60,6 +61,32 @@ def save_file(object_key: str, payload: bytes, content_type: str) -> dict[str, o
         "contentType": content_type,
         "size": len(payload),
     }
+
+
+def read_file(object_key: str) -> tuple[bytes, str]:
+    """读取单个私有结果文件，供 NestJS 鉴权后代理下载。"""
+
+    settings = get_settings()
+    storage = minio_client()
+    try:
+        metadata = storage.stat_object(settings.minio_bucket, object_key)
+        response = storage.get_object(settings.minio_bucket, object_key)
+        try:
+            payload = response.read()
+        finally:
+            response.close()
+            response.release_conn()
+    except S3Error as error:
+        if error.code in {"NoSuchKey", "NoSuchObject", "NoSuchBucket"}:
+            raise FileNotFoundError(object_key) from error
+        raise
+    logger.info(
+        "MinIO generated file read: bucket=%s object_key=%s bytes=%d",
+        settings.minio_bucket,
+        object_key,
+        len(payload),
+    )
+    return payload, metadata.content_type or "application/octet-stream"
 
 
 def check_integrations() -> None:

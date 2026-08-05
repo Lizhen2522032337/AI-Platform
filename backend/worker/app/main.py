@@ -393,6 +393,8 @@ def process_message(body: bytes) -> None:
             "databaseType": database_type,
             "modelName": model_name,
             "conversationId": conversation_id,
+            # 终态再次携带完整文本，避免前端停留在最后一次节流写入的 partialText。
+            "partialText": answer,
             "result": result,
             "executionTrace": execution_trace,
         },

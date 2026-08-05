@@ -7,7 +7,9 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequireAnyPermission } from '../auth/permissions.decorator';
@@ -33,6 +35,28 @@ export class TasksController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<AiTask> {
     return this.tasksService.findOne(id, user);
+  }
+
+  @Get(':id/artifacts/:artifactIndex')
+  @RequireAnyPermission('tasks:read:own', 'tasks:read:any')
+  async downloadArtifact(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('artifactIndex', ParseIntPipe) artifactIndex: number,
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() response: Response,
+  ): Promise<void> {
+    const artifact = await this.tasksService.downloadArtifact(
+      id,
+      artifactIndex,
+      user,
+    );
+    response.setHeader('Content-Type', artifact.contentType);
+    response.setHeader('Content-Length', artifact.content.length.toString());
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(artifact.name)}`,
+    );
+    response.send(artifact.content);
   }
 
   @Post()

@@ -1,5 +1,5 @@
 import type { AiTask, DatabaseType, ModelProvider } from '../types/task'
-import { request } from './client'
+import { downloadFile, request } from './client'
 
 export const tasksApi = {
   list: () => request<AiTask[]>('/tasks'),
@@ -13,5 +13,6 @@ export const tasksApi = {
       body: JSON.stringify({ prompt, modelProvider, databaseType }),
     }),
   eventsUrl: (taskId: number) => `/realtime/events/${taskId}`,
-
+  downloadArtifact: (taskId: number, artifactIndex: number, fileName: string) =>
+    downloadFile(`/tasks/${taskId}/artifacts/${artifactIndex}`, fileName),
 }

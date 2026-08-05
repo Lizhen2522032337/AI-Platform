@@ -13,6 +13,14 @@ export interface ExecutionTraceStep {
   durationMs?: number
 }
 
+export interface TaskArtifact {
+  name: string
+  kind: 'report' | 'query_workbook' | 'evidence' | 'query_data' | string
+  objectKey: string
+  contentType: string
+  size: number
+}
+
 export interface AiTask {
   id: number
   prompt: string
@@ -27,6 +35,7 @@ export interface AiTask {
     text?: string
     vectorId?: string
     objectKey?: string
+    artifacts?: TaskArtifact[]
     executionTrace?: ExecutionTraceStep[]
   } | null
   executionTrace?: ExecutionTraceStep[]

@@ -8,8 +8,8 @@ import time
 from collections.abc import AsyncIterator
 from typing import Literal
 
-from fastapi import FastAPI, Response, status
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Response, status
+from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
 from app.agent import AgentPreparation, prepare_agent
@@ -19,7 +19,7 @@ from app.agent.report_tools import create_report_files
 from app.agent.types import DatabaseType
 from app.config.settings import get_settings
 from app.dify import DifyKnowledgeError, retrieve_knowledge
-from app.integrations import check_integrations, delete_results, save_result
+from app.integrations import check_integrations, delete_results, read_file, save_result
 from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
 
 # 统一 FastAPI 及其子模块日志级别；生产日志不包含提示词、知识正文或密钥。
@@ -65,6 +65,28 @@ class DeleteArtifactsRequest(BaseModel):
     """一次会话删除请求中需要清理的全部任务。"""
 
     tasks: list[ArtifactTask] = Field(max_length=100)
+
+
+class DownloadArtifactRequest(BaseModel):
+    """NestJS 已鉴权后提交的私有产物定位信息。"""
+
+    task_id: int = Field(alias="taskId", gt=0)
+    object_key: str = Field(
+        alias="objectKey",
+        min_length=1,
+        max_length=500,
+        pattern=r"^tasks/[1-9][0-9]*/[A-Za-z0-9][A-Za-z0-9._/-]*$",
+    )
+
+    @model_validator(mode="after")
+    def validate_task_prefix(self) -> "DownloadArtifactRequest":
+        """禁止跨任务读取或使用路径跳转片段。"""
+
+        if not self.object_key.startswith(f"tasks/{self.task_id}/"):
+            raise ValueError("objectKey does not belong to taskId")
+        if ".." in self.object_key.split("/"):
+            raise ValueError("objectKey contains an invalid path segment")
+        return self
 
 
 app = FastAPI(title="Enterprise AI Service", version="1.0.0")
@@ -405,3 +427,14 @@ def delete_task_artifacts(payload: DeleteArtifactsRequest) -> Response:
     )
     logger.info("AI task artifacts deleted: tasks=%d", len(payload.tasks))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/artifacts/download")
+def download_task_artifact(payload: DownloadArtifactRequest) -> Response:
+    """仅供 NestJS 内部代理读取，不直接向浏览器发布 MinIO。"""
+
+    try:
+        content, content_type = read_file(payload.object_key)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="artifact not found") from error
+    return Response(content=content, media_type=content_type)

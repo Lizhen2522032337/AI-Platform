@@ -3,10 +3,23 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { errorBody } from '../common/api-error.filter';
+import {
+  AiArtifactsService,
+  type DownloadedArtifact,
+} from '../infrastructure/ai-artifacts.service';
 import { RabbitService } from '../infrastructure/rabbit.service';
 import { RedisService } from '../infrastructure/redis.service';
 import { CreateTaskDto } from './create-task.dto';
 import { AiTask } from './task.entity';
+
+interface StoredArtifact {
+  name: string;
+  objectKey: string;
+}
+
+export interface TaskArtifactDownload extends DownloadedArtifact {
+  name: string;
+}
 
 @Injectable()
 export class TasksService {
@@ -17,6 +30,7 @@ export class TasksService {
     private readonly repository: Repository<AiTask>,
     private readonly rabbitService: RabbitService,
     private readonly redisService: RedisService,
+    private readonly artifactsService: AiArtifactsService,
   ) {}
 
   findAll(user: AuthenticatedUser): Promise<AiTask[]> {
@@ -41,6 +55,26 @@ export class TasksService {
       throw new NotFoundException(errorBody('NOT_FOUND', 'task not found'));
     }
     return task;
+  }
+
+  async downloadArtifact(
+    id: number,
+    artifactIndex: number,
+    user: AuthenticatedUser,
+  ): Promise<TaskArtifactDownload> {
+    const task = await this.findOne(id, user);
+    const artifacts = this.storedArtifacts(task);
+    const artifact = artifacts[artifactIndex];
+    if (!artifact) {
+      throw new NotFoundException(
+        errorBody('ARTIFACT_NOT_FOUND', '文件不存在或不属于当前任务'),
+      );
+    }
+    const downloaded = await this.artifactsService.downloadTaskArtifact(
+      task.id,
+      artifact.objectKey,
+    );
+    return { name: artifact.name, ...downloaded };
   }
 
   async create(
@@ -117,5 +151,27 @@ export class TasksService {
       throw error;
     }
     return task;
+  }
+
+  private storedArtifacts(task: AiTask): StoredArtifact[] {
+    const rawArtifacts = task.result?.['artifacts'];
+    if (!Array.isArray(rawArtifacts)) return [];
+    const prefix = `tasks/${task.id}/`;
+    return rawArtifacts.flatMap((value) => {
+      if (typeof value !== 'object' || value === null) return [];
+      const record = value as Record<string, unknown>;
+      const name = record.name;
+      const objectKey = record.objectKey;
+      if (
+        typeof name !== 'string' ||
+        !name.trim() ||
+        typeof objectKey !== 'string' ||
+        !objectKey.startsWith(prefix) ||
+        objectKey.split('/').includes('..')
+      ) {
+        return [];
+      }
+      return [{ name: name.slice(0, 180), objectKey }];
+    });
   }
 }

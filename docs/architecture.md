@@ -76,8 +76,9 @@ enterprise-ai-platform/
 9. FastAPI 把 Agent 证据作为受控参考资料，根据 `modelProvider` 调用 DeepSeek 或通义千问，并同时发送完整对话历史。
 10. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
 11. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
-12. 报表任务生成 Markdown、证据 JSON 和查询 CSV；文件连同完整结果写入 MinIO，再发送 `complete` 事件。
+12. 报表任务生成 Markdown、Word、PDF、Excel、证据 JSON 和查询 CSV；文件写入 MinIO 后，在任务结果中记录文件元数据，再发送 `complete` 事件。
 13. Worker 把完整回答、供应商、实际模型和结果元数据写回 PostgreSQL，并写入 Redis `completed` 状态；下一轮会把本轮问答加入上下文。
+14. React 通过 NestJS 的任务归属鉴权接口下载结果文件；MinIO 保持仅在 Compose 内网可见。
 
 ## 4. 数据和端口边界
 

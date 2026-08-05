@@ -255,6 +255,46 @@
 .assistant-text { color: #ededed; }
 .message-error { margin-top: 10px; padding: 10px 12px; border-radius: 9px; color: #fecaca; background: rgba(127, 29, 29, .3); }
 
+.artifact-downloads {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #3a3a3a;
+}
+.artifact-downloads-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #d4d4d4;
+  font-size: .8rem;
+  font-weight: 700;
+}
+.artifact-downloads-title small { color: #7f7f7f; font-weight: 500; }
+.artifact-download-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.artifact-download-button {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #444;
+  border-radius: 9px;
+  color: #dbeafe;
+  background: #202936;
+  cursor: pointer;
+  font: inherit;
+  font-size: .76rem;
+}
+.artifact-download-button span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-download-button small { color: #93c5fd; }
+.artifact-download-button:hover:not(:disabled) { border-color: #60a5fa; background: #26364b; }
+.artifact-download-button:disabled { cursor: wait; opacity: .58; }
+
 .execution-trace {
   margin: 2px 0 18px;
   padding-bottom: 14px;

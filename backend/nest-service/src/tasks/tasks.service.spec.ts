@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import type { Repository } from 'typeorm';
 import type { RabbitService } from '../infrastructure/rabbit.service';
 import type { RedisService } from '../infrastructure/redis.service';
+import type { AiArtifactsService } from '../infrastructure/ai-artifacts.service';
 import { AiTask } from './task.entity';
 import { TasksService } from './tasks.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -48,12 +49,20 @@ describe('TasksService', () => {
   const redisService = {
     setTaskState: jest.fn(),
   } as unknown as jest.Mocked<RedisService>;
+  const artifactsService = {
+    downloadTaskArtifact: jest.fn(),
+  } as unknown as jest.Mocked<AiArtifactsService>;
 
   let service: TasksService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new TasksService(repository, rabbitService, redisService);
+    service = new TasksService(
+      repository,
+      rabbitService,
+      redisService,
+      artifactsService,
+    );
   });
 
   it('creates a queued task and publishes a durable work message', async () => {
@@ -71,7 +80,7 @@ describe('TasksService', () => {
         user,
       ),
     ).resolves.toEqual(task);
-    expect(rabbitService.publishTask).toHaveBeenCalledWith({
+    expect(rabbitService.publishTask.mock.calls[0]?.[0]).toEqual({
       id: 1,
       ownerId: 7,
       prompt: task.prompt,
@@ -81,14 +90,17 @@ describe('TasksService', () => {
       conversationId: null,
       createdAt: '2026-07-26T00:00:00.000Z',
     });
-    expect(redisService.setTaskState).toHaveBeenCalledWith(1, {
-      id: 1,
-      ownerId: 7,
-      status: 'queued',
-      modelProvider: 'deepseek',
-      databaseType: 'postgresql',
-      conversationId: null,
-    });
+    expect(redisService.setTaskState.mock.calls[0]).toEqual([
+      1,
+      {
+        id: 1,
+        ownerId: 7,
+        status: 'queued',
+        modelProvider: 'deepseek',
+        databaseType: 'postgresql',
+        conversationId: null,
+      },
+    ]);
   });
 
   it('grants dynamic SQL only from the server-side admin permission', async () => {
@@ -117,7 +129,7 @@ describe('TasksService', () => {
   it('returns tasks newest first', async () => {
     repository.find.mockResolvedValue([sampleTask()]);
     await expect(service.findAll(user)).resolves.toHaveLength(1);
-    expect(repository.find).toHaveBeenCalledWith({
+    expect(repository.find.mock.calls[0]?.[0]).toEqual({
       where: { createdById: 7 },
       order: { id: 'DESC' },
       take: 100,
@@ -129,5 +141,47 @@ describe('TasksService', () => {
     await expect(service.findOne(999, user)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('downloads only an artifact recorded on the owned task', async () => {
+    const task = sampleTask();
+    task.status = 'completed';
+    task.result = {
+      artifacts: [
+        {
+          name: '数据报告.xlsx',
+          objectKey: 'tasks/1/report.xlsx',
+          contentType:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+      ],
+    };
+    repository.findOneBy.mockResolvedValue(task);
+    artifactsService.downloadTaskArtifact.mockResolvedValue({
+      content: Buffer.from('workbook'),
+      contentType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    await expect(service.downloadArtifact(1, 0, user)).resolves.toMatchObject({
+      name: '数据报告.xlsx',
+      content: Buffer.from('workbook'),
+    });
+    expect(artifactsService.downloadTaskArtifact.mock.calls[0]).toEqual([
+      1,
+      'tasks/1/report.xlsx',
+    ]);
+  });
+
+  it('rejects an artifact index that is not recorded on the task', async () => {
+    const task = sampleTask();
+    task.status = 'completed';
+    task.result = { artifacts: [] };
+    repository.findOneBy.mockResolvedValue(task);
+
+    await expect(service.downloadArtifact(1, 0, user)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(artifactsService.downloadTaskArtifact.mock.calls).toHaveLength(0);
   });
 });

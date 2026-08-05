@@ -129,6 +129,8 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
     )
     assert redis_updates[-1]["status"] == "completed"
     assert redis_updates[-1]["ownerId"] == 3
+    assert redis_updates[-1]["partialText"] == "完成"
+    assert redis_updates[-1]["result"]["text"] == "完成"
 
 
 def test_process_message_keeps_trace_when_ai_service_fails(monkeypatch) -> None:

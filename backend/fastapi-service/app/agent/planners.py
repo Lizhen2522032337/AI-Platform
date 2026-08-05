@@ -18,6 +18,7 @@ from app.llm import LlmProviderError, ModelProvider, complete_json
 
 logger = logging.getLogger(__name__)
 _REPORT_WORDS = ("报表", "报告", "统计", "趋势", "汇总", "导出", "日报", "周报", "月报")
+_FILE_EXPORT_WORDS = ("导出", "下载", "excel", "xlsx", "word", "docx", "pdf", "csv", "文件", "文档", "报表", "报告")
 _NOTIFY_WORDS = ("通知", "发送", "推送", "告警")
 _PLATFORM_USER_WORDS = ("用户", "账号", "账户", "角色", "权限")
 _PLATFORM_QUERY_WORDS = ("整理", "列出", "查询", "查看", "统计", "汇总", "筛选", "多少")
@@ -201,7 +202,10 @@ async def create_plan(
                 purpose="查询当前平台用户及其角色和状态",
                 sql=_DEFAULT_PLATFORM_USERS_SQL,
             )
-    if intent == "report_generation":
+    if intent == "report_generation" or any(
+        word in prompt.lower() for word in _FILE_EXPORT_WORDS
+    ):
+        # 平台数据查询优先于报表意图分流；显式要求导出时仍必须生成产物。
         plan.report_required = True
     # 通知属于外部副作用：用户请求、服务开关和自动发送开关三者必须同时满足。
     explicitly_requested = any(word in prompt for word in _NOTIFY_WORDS)
