@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # 基础镜像由 Compose 注入；生产环境可在仓库外的 base-images.env 中固定到 digest。
 ARG PYTHON_BASE_IMAGE=python:3.13-slim
 FROM ${PYTHON_BASE_IMAGE}

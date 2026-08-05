@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 ARG GO_BASE_IMAGE=golang:1.26-alpine
 ARG ALPINE_BASE_IMAGE=alpine:latest
 FROM ${GO_BASE_IMAGE} AS build
