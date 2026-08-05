@@ -61,7 +61,8 @@ exit
 ### 3.1 创建目录和空文件
 
 ```bash
-sudo install -d -m 700 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
+# 密钥文件继续使用 600；目录使用 711，让非 root 容器只能穿过但不能列目录。
+sudo install -d -m 711 -o "$USER" -g "$(id -gn)" /etc/enterprise-ai-platform
 install -m 600 /dev/null /etc/enterprise-ai-platform/database.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/platform.env
 install -m 600 /dev/null /etc/enterprise-ai-platform/llm.env
@@ -251,9 +252,12 @@ git log -1 --oneline
 
 ```bash
 if [ ! -f /etc/enterprise-ai-platform/database-catalog.json ]; then
-  install -m 600 deploy/database-catalog.example.json \
+  # 查询目录不含密码，FastAPI 以非 root 用户运行，因此需要只读权限。
+  install -m 644 deploy/database-catalog.example.json \
     /etc/enterprise-ai-platform/database-catalog.json
 fi
+chmod 711 /etc/enterprise-ai-platform
+chmod 644 /etc/enterprise-ai-platform/database-catalog.json
 vi /etc/enterprise-ai-platform/database-catalog.json
 ```
 

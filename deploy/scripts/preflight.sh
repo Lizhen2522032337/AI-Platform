@@ -12,6 +12,28 @@ readonly -a REQUIRED_BASE_IMAGE_VARIABLES=(
     GO_BASE_IMAGE ALPINE_BASE_IMAGE NGINX_BASE_IMAGE POSTGRES_IMAGE REDIS_IMAGE
     RABBITMQ_IMAGE QDRANT_IMAGE MINIO_IMAGE MINIO_MC_IMAGE
 )
+readonly DATABASE_CATALOG_PATH="/etc/enterprise-ai-platform/database-catalog.json"
+
+check_database_catalog_permissions() {
+    local config_dir directory_mode catalog_mode
+
+    if [[ ! -e "${DATABASE_CATALOG_PATH}" ]]; then
+        warn "未找到数据库查询目录：${DATABASE_CATALOG_PATH}；固定 query_id 将不可用"
+        return
+    fi
+    require_command stat
+    config_dir="$(dirname -- "${DATABASE_CATALOG_PATH}")"
+    directory_mode="$(stat -c '%a' "${config_dir}")"
+    catalog_mode="$(stat -c '%a' "${DATABASE_CATALOG_PATH}")"
+    # FastAPI 固定以 10001:10001 非 root 身份运行。目录只开放穿越权限，不开放列目录；
+    # 查询目录不含密码，可只读；database.env、llm.env 等密钥文件仍保持 600。
+    if (( (8#${directory_mode} & 1) == 0 )); then
+        die "${config_dir} 阻止非 root 容器访问；请执行：chmod 711 ${config_dir}"
+    fi
+    if (( (8#${catalog_mode} & 4) == 0 )); then
+        die "${DATABASE_CATALOG_PATH} 对 FastAPI 不可读；请执行：chmod 644 ${DATABASE_CATALOG_PATH}"
+    fi
+}
 
 main() {
     local variable value available_kb minimum_kb
@@ -21,6 +43,7 @@ main() {
     ensure_docker_compose
     ensure_database_env
     ensure_platform_env
+    check_database_catalog_permissions
     require_command docker
     require_command sha256sum
     docker buildx version >/dev/null 2>&1 || die '缺少 Docker Buildx/BuildKit'

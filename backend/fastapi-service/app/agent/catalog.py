@@ -117,10 +117,10 @@ def load_query_catalog(settings: Settings | None = None) -> QueryCatalog:
 
     current = settings or get_settings()
     path = Path(current.database_catalog_file or current.db2_catalog_file)
-    if not path.is_file():
-        logger.warning("Database query catalog not found: path=%s", path)
-        return QueryCatalog()
     try:
+        if not path.is_file():
+            logger.warning("Database query catalog not found: path=%s", path)
+            return QueryCatalog()
         body = json.loads(path.read_text(encoding="utf-8"))
         catalog = QueryCatalog.model_validate(body)
     except (OSError, ValueError, ValidationError) as error:

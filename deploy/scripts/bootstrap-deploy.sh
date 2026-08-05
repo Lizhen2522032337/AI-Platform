@@ -37,10 +37,11 @@ fi
 
 if [[ ${EUID} -eq 0 ]]; then
     install -d -m 755 "${DEPLOY_DIR}"
-    install -d -m 700 "${CONFIG_DIR}"
+    # 非 root 应用容器需要穿过配置目录读取非敏感目录文件；711 不允许列目录。
+    install -d -m 711 "${CONFIG_DIR}"
 else
     sudo install -d -m 755 -o "$(id -un)" -g "$(id -gn)" "${DEPLOY_DIR}"
-    sudo install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "${CONFIG_DIR}"
+    sudo install -d -m 711 -o "$(id -un)" -g "$(id -gn)" "${CONFIG_DIR}"
 fi
 
 # 数据库、平台和大模型配置必须由用户预先准备；脚本不会生成或输出真实密码或 API Key。
