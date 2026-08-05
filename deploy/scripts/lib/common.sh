@@ -25,6 +25,10 @@ readonly DATABASE_MODE="${DATABASE_MODE:-managed}"
 readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
 readonly DEPLOY_LOCK_DIR="${DEPLOY_STATE_DIR}/deploy.lock"
 readonly APP_IMAGE_REGISTRY="${APP_IMAGE_REGISTRY:-enterprise-ai-platform}"
+# Python 依赖在 Docker 构建阶段下载，默认使用国内镜像；生产环境可在 deploy.env 覆盖。
+readonly PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+readonly PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}"
+readonly PIP_RETRIES="${PIP_RETRIES:-8}"
 readonly -a INFRASTRUCTURE_SERVICES=(redis rabbitmq qdrant minio)
 readonly -a APPLICATION_SERVICES=(frontend fastapi-service nest-service gin-service worker)
 readonly -a BACKEND_SERVICES=(fastapi-service nest-service gin-service worker)
@@ -43,6 +47,7 @@ if [[ -f "${BASE_IMAGES_FILE}" ]]; then
 fi
 export DATABASE_ENV_FILE PLATFORM_ENV_FILE LLM_ENV_FILE AGENT_ENV_FILE
 export DOCKER_BUILDKIT APP_IMAGE_REGISTRY BASE_IMAGES_FILE
+export PIP_INDEX_URL PIP_DEFAULT_TIMEOUT PIP_RETRIES
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"

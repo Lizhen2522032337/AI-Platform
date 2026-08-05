@@ -152,6 +152,9 @@ services:
       dockerfile: Dockerfile
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_FASTAPI_BASE_IMAGE:-python:3.13-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
+        PIP_RETRIES: ${PIP_RETRIES:-8}
         APP_VERSION: ${APP_IMAGE_TAG:-local}
         VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped
@@ -264,6 +267,9 @@ services:
       dockerfile: Dockerfile
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_WORKER_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
+        PIP_RETRIES: ${PIP_RETRIES:-8}
         APP_VERSION: ${APP_IMAGE_TAG:-local}
         VCS_REF: ${APP_IMAGE_TAG:-local}
     restart: unless-stopped

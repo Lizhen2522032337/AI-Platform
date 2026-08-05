@@ -1,11 +1,9 @@
 ARG PYTHON_BASE_IMAGE=python:3.11-slim
 FROM ${PYTHON_BASE_IMAGE}
 
-ARG APP_VERSION=local
-ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="Enterprise AI Worker" \
-      org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}"
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_DEFAULT_TIMEOUT=120
+ARG PIP_RETRIES=8
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -23,6 +21,13 @@ RUN --mount=type=cache,id=enterprise-ai-platform-python311-pip,target=/root/.cac
     && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
 
 COPY --chown=app:app app ./app
+
+# 版本标签放在依赖层之后，避免每次 Git 提交变化都重新执行 pip 下载。
+ARG APP_VERSION=local
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Enterprise AI Worker" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 USER 10001:10001
 
