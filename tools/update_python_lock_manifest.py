@@ -25,12 +25,12 @@ MANIFEST_NAME = "python-lock.manifest.sha256"
 
 
 def file_sha256(path: Path) -> str:
-    """分块计算文件哈希，避免锁文件增大后一次性占用过多内存。"""
+    """统一换行为 LF 后计算哈希，保证 Windows 生成的清单可在 Linux 校验。"""
 
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
+    content = path.read_bytes()
+    normalized_content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    digest.update(normalized_content)
     return digest.hexdigest()
 
 

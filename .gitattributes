@@ -7,6 +7,11 @@ Dockerfile text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 
+# Python 依赖锁文件会在 Windows 生成、Linux 校验，统一使用 LF，避免哈希因换行符不同而失效
+requirements*.txt text eol=lf
+requirements*.lock text eol=lf
+python-lock.manifest.sha256 text eol=lf
+
 # Windows 自动化脚本统一使用 CRLF。
 *.ps1 text eol=crlf
 *.bat text eol=crlf
