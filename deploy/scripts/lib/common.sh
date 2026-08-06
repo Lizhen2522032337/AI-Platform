@@ -25,6 +25,7 @@ readonly KNOWLEDGE_CONFIG_FILE="${KNOWLEDGE_CONFIG_FILE:-/etc/enterprise-ai-plat
 readonly DATABASE_MODE="${DATABASE_MODE:-managed}"
 readonly DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-${HOME}/.local/state/enterprise-ai-platform}"
 readonly DEPLOY_LOCK_DIR="${DEPLOY_STATE_DIR}/deploy.lock"
+readonly DEPLOY_LOCK_OWNER_FILE="${DEPLOY_LOCK_DIR}/owner.pid"
 readonly APP_IMAGE_REGISTRY="${APP_IMAGE_REGISTRY:-enterprise-ai-platform}"
 # Python 依赖在 Docker 构建阶段下载，默认使用国内镜像；生产环境可在 deploy.env 覆盖。
 readonly PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
@@ -197,7 +198,31 @@ acquire_deploy_lock() {
     if ! mkdir "${DEPLOY_LOCK_DIR}" 2>/dev/null; then
         die "已有部署任务正在运行；若确认没有任务，请删除 ${DEPLOY_LOCK_DIR}"
     fi
-    trap 'rmdir "${DEPLOY_LOCK_DIR}" 2>/dev/null || true' EXIT
+    printf '%s\n' "${BASHPID}" >"${DEPLOY_LOCK_OWNER_FILE}"
+    trap release_deploy_lock EXIT
+}
+
+adopt_deploy_lock_after_exec() {
+    # update-all 拉取到新版本后会 exec 自身。exec 前后操作系统 PID 不变，因此可以
+    # 安全继承原部署锁，同时拒绝外部进程伪造“已经持锁”的环境变量。
+    local owner_pid=''
+    [[ -r "${DEPLOY_LOCK_OWNER_FILE}" ]] \
+        || die '部署脚本尝试自更新重启，但找不到原部署锁'
+    owner_pid="$(<"${DEPLOY_LOCK_OWNER_FILE}")"
+    [[ "${owner_pid}" == "${BASHPID}" ]] \
+        || die '部署脚本自更新后的进程与部署锁持有者不一致'
+    trap release_deploy_lock EXIT
+}
+
+release_deploy_lock() {
+    local owner_pid=''
+    if [[ -r "${DEPLOY_LOCK_OWNER_FILE}" ]]; then
+        owner_pid="$(<"${DEPLOY_LOCK_OWNER_FILE}")"
+    fi
+    if [[ "${owner_pid}" == "${BASHPID}" ]]; then
+        rm -f -- "${DEPLOY_LOCK_OWNER_FILE}"
+        rmdir "${DEPLOY_LOCK_DIR}" 2>/dev/null || true
+    fi
 }
 
 wait_for_healthy() {

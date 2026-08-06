@@ -468,6 +468,8 @@ cd /opt/enterprise-ai-platform
 
 脚本会先检查 Git 工作区，再执行 `fetch` 和 `pull --ff-only`。存在本地改动时会停止，不会覆盖。NestJS 或 Worker 更新前会执行数据库迁移；基础设施配置发生变化时应执行全量更新并人工核对数据兼容性。
 
+`update-all.sh` 如果在本次拉取中发现自身或 `lib/common.sh` 已更新，会保留部署锁并通过 `exec` 自动重新载入新脚本，然后继续迁移、构建和启动，不再需要人工执行第二次。
+
 ## 7. 状态、日志和验收
 
 ```bash
