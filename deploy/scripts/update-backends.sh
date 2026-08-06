@@ -17,24 +17,13 @@ main() {
     )
 
     # 单次拉取保证全部应用服务来自同一个 Git 提交。
-    acquire_deploy_lock
-    pull_code "${branch}"
-    ensure_docker_compose
-    ensure_database_env
-    ensure_platform_env
-    compose config --quiet
-    run_preflight
+    prepare_update "${BASH_SOURCE[0]}" "${branch}" "$@"
+    prepare_deployment_environment
     start_database_if_managed
     start_infrastructure
     run_migrations
 
-    log '构建 NestJS、FastAPI、Gin 和 Worker 镜像'
-    compose build "${backend_services[@]}"
-    log '只重建后端和 Worker 容器'
-    compose up -d --no-deps --force-recreate "${backend_services[@]}"
-    for service in "${backend_services[@]}"; do
-        wait_for_healthy "${service}"
-    done
+    rebuild_and_recreate_services "${backend_services[@]}"
 
     refresh_nginx
     compose ps

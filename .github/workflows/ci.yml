@@ -16,6 +16,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  deployment-scripts:
+    name: Deployment scripts / Bash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: 校验全部部署脚本语法
+        run: bash -n deploy/scripts/*.sh deploy/scripts/lib/*.sh
+      - name: 校验更新入口强制重建契约
+        shell: bash
+        run: |
+          for entry in deploy/scripts/update-*.sh; do
+            grep -q 'prepare_update' "${entry}" || {
+              echo "${entry} 未接入统一更新入口" >&2
+              exit 1
+            }
+          done
+          grep -q -- '--force-recreate' deploy/scripts/lib/common.sh
+          grep -q 'assert_service_recreated' deploy/scripts/lib/common.sh
+      - name: 验证合法 LLM 配置不会触发静默退出
+        shell: bash
+        run: |
+          test_env="$(mktemp)"
+          trap 'rm -f "${test_env}"' EXIT
+          cat >"${test_env}" <<'EOF'
+          DEEPSEEK_API_KEY=test-deepseek-key
+          DEEPSEEK_BASE_URL=https://example.invalid/v1
+          DEEPSEEK_MODEL=deepseek-test
+          QWEN_API_KEY=test-qwen-key
+          QWEN_BASE_URL=https://example.invalid/v1
+          QWEN_MODEL=qwen-test
+          EMBEDDING_API_KEY=test-embedding-key
+          EMBEDDING_BASE_URL=https://example.invalid/v1
+          EMBEDDING_MODEL=embedding-test
+          EMBEDDING_DIMENSION=1024
+          EMBEDDING_REQUEST_TIMEOUT_SECONDS=60
+          KNOWLEDGE_CONFIG_FILE=/tmp/knowledge-base.json
+          LLM_REQUEST_TIMEOUT_SECONDS=300
+          LLM_MAX_TOKENS=2048
+          EOF
+          export LLM_ENV_FILE="${test_env}"
+          source deploy/scripts/lib/common.sh
+          ensure_llm_env
+
   fastapi:
     name: FastAPI / Python 3.13
     runs-on: ubuntu-latest
@@ -108,7 +151,7 @@ jobs:
 
   container-images:
     name: Container / ${{ matrix.service }}
-    needs: [fastapi, worker, nest, frontend, gin]
+    needs: [deployment-scripts, fastapi, worker, nest, frontend, gin]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

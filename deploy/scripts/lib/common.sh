@@ -64,6 +64,18 @@ die() {
     exit 1
 }
 
+report_unexpected_error() {
+    local exit_code="$?"
+    local source_file="${BASH_SOURCE[1]:-unknown}"
+    local source_line="${BASH_LINENO[0]:-unknown}"
+    printf '[%s] 错误：部署脚本意外终止（exit=%s，位置=%s:%s）\n' \
+        "$(date '+%F %T')" "${exit_code}" "${source_file}" "${source_line}" >&2
+    return "${exit_code}"
+}
+
+# 防止 set -e 再次出现没有任何错误文字就返回命令行的情况。
+trap report_unexpected_error ERR
+
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"
 }
@@ -120,6 +132,7 @@ ensure_database_env() {
         [[ "${configured_host}" == 'postgres' ]] \
             || die 'managed 模式要求 database.env 中 POSTGRES_HOST=postgres'
     fi
+    return 0
 }
 
 ensure_platform_env() {
@@ -143,6 +156,7 @@ ensure_platform_env() {
         && die "${PLATFORM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
 
     ensure_llm_env
+    return 0
 }
 
 ensure_knowledge_config() {
@@ -152,6 +166,7 @@ ensure_knowledge_config() {
             "${KNOWLEDGE_CONFIG_FILE}"
         log "已创建知识库热配置：${KNOWLEDGE_CONFIG_FILE}"
     fi
+    return 0
 }
 
 ensure_llm_env() {
@@ -172,6 +187,8 @@ ensure_llm_env() {
     done
     grep -Eqi 'change_me|请替换|你的工作空间|your[_-]?api|sk-xxx' "${LLM_ENV_FILE}" \
         && die "${LLM_ENV_FILE} 仍包含示例占位值，请先填写真实配置"
+    # grep 在“没有占位符”时返回 1，这是配置正常的情况，不能让 set -e 静默退出更新脚本。
+    return 0
 }
 
 release_tag() {
@@ -361,6 +378,51 @@ pull_code() {
     git -C "${REPO_ROOT}" diff --name-only "${old_commit}" "${new_commit}"
 }
 
+deployment_runtime_revision() {
+    local entry_script="$1"
+    # 更新入口和公共函数库都可能在 pull 时被替换；组合哈希用于判断是否必须 exec。
+    git -C "${REPO_ROOT}" hash-object \
+        "${entry_script}" \
+        "${SCRIPT_DIR}/lib/common.sh"
+}
+
+prepare_update() {
+    local entry_script="$1"
+    local branch="$2"
+    shift 2
+    local before_revision after_revision reexec_count
+
+    reexec_count="${DEPLOY_SELF_REEXEC_COUNT:-0}"
+    [[ "${reexec_count}" =~ ^[0-9]+$ ]] || die 'DEPLOY_SELF_REEXEC_COUNT 格式无效'
+    if ((reexec_count > 0)); then
+        adopt_deploy_lock_after_exec
+    else
+        acquire_deploy_lock
+    fi
+
+    before_revision="$(deployment_runtime_revision "${entry_script}")"
+    pull_code "${branch}"
+    after_revision="$(deployment_runtime_revision "${entry_script}")"
+    if [[ "${before_revision}" != "${after_revision}" ]]; then
+        ((reexec_count < 2)) || die '部署脚本连续自更新次数过多，请检查部署分支是否稳定'
+        log "检测到 $(basename -- "${entry_script}") 或公共函数库已更新，自动重新载入后继续部署"
+        export DEPLOY_SELF_REEXEC_COUNT="$((reexec_count + 1))"
+        exec bash "${entry_script}" "$@"
+    fi
+    return 0
+}
+
+prepare_deployment_environment() {
+    log '检查 Docker、外部配置、依赖锁和磁盘空间'
+    ensure_docker_compose
+    ensure_database_env
+    ensure_platform_env
+    ensure_knowledge_config
+    compose config --quiet
+    run_preflight
+    log '部署环境检查完成，开始更新运行中的服务'
+}
+
 wait_http() {
     local url="$1"
     local description="$2"
@@ -429,24 +491,61 @@ uses_database() {
     esac
 }
 
+assert_service_recreated() {
+    local service="$1"
+    local previous_id="$2"
+    local current_id
+
+    current_id="$(compose ps -q "${service}")"
+    [[ -n "${current_id}" ]] || die "${service} 更新后没有运行中的容器"
+    if [[ -n "${previous_id}" && "${previous_id}" == "${current_id}" ]]; then
+        die "${service} 容器 ID 未变化，未完成强制重建"
+    fi
+    log "已确认 ${service} 容器重新创建：${previous_id:-未运行} -> ${current_id}"
+}
+
+rebuild_and_recreate_services() {
+    (($# > 0)) || die '没有指定需要构建的应用服务'
+    local service
+    local -A previous_ids=()
+    local -a services=("$@")
+
+    for service in "${services[@]}"; do
+        previous_ids["${service}"]="$(compose ps -q "${service}" 2>/dev/null || true)"
+    done
+    log "开始构建应用镜像：${services[*]}"
+    compose build "${services[@]}"
+    log "强制重新创建应用容器：${services[*]}"
+    compose up -d --no-deps --force-recreate "${services[@]}"
+    for service in "${services[@]}"; do
+        wait_for_healthy "${service}"
+        assert_service_recreated "${service}" "${previous_ids[${service}]}"
+    done
+}
+
+recreate_nginx() {
+    local previous_id
+    previous_id="$(compose ps -q nginx 2>/dev/null || true)"
+    if [[ -n "${previous_id}" ]]; then
+        log '校验新的 Nginx 配置'
+        compose exec -T nginx nginx -t
+    fi
+    log '强制重新创建 Nginx 容器'
+    compose up -d --no-deps --force-recreate nginx
+    wait_for_healthy nginx
+    assert_service_recreated nginx "${previous_id}"
+}
+
 refresh_nginx() {
     # Nginx 在启动时解析上游容器地址，后端重建后需重启以刷新地址。
-    compose up -d --no-deps nginx
-    compose restart nginx
-    wait_for_healthy nginx
+    recreate_nginx
 }
 
 update_one_service() {
     local service="$1"
 
     validate_service "${service}"
-    ensure_repository
-    ensure_docker_compose
-    ensure_database_env
-    ensure_platform_env
-    ensure_knowledge_config
-    compose config --quiet
-    run_preflight
+    prepare_deployment_environment
 
     if is_backend_service "${service}"; then
         start_infrastructure
@@ -457,19 +556,14 @@ update_one_service() {
     fi
 
     if [[ "${service}" == 'nginx' ]]; then
-        log '检查并重新加载 Nginx 配置'
-        compose exec -T nginx nginx -t
-        compose up -d --no-deps --force-recreate nginx
-        wait_for_healthy nginx
+        recreate_nginx
     else
-        log "只构建并重建 ${service}"
-        compose build "${service}"
-        compose up -d --no-deps --force-recreate "${service}"
-        wait_for_healthy "${service}"
+        rebuild_and_recreate_services "${service}"
         refresh_nginx
     fi
 
     compose ps
     verify_service "${service}"
     record_successful_release "component:${service}"
+    log "${service} 已完成构建、容器重建和健康检查"
 }

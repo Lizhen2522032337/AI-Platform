@@ -15,6 +15,7 @@ main() {
     local includes_nginx=0
     local -a requested_services=()
     local -a build_services=()
+    local -a original_args=("$@")
 
     if [[ "${1:-}" == '--branch' ]]; then
         (($# >= 3)) || die '用法：update-services.sh --branch <分支> <服务...>'
@@ -24,13 +25,8 @@ main() {
     (($# > 0)) || die '请至少指定一个服务'
     requested_services=("$@")
 
-    acquire_deploy_lock
-    pull_code "${branch}"
-    ensure_docker_compose
-    ensure_database_env
-    ensure_platform_env
-    compose config --quiet
-    run_preflight
+    prepare_update "${BASH_SOURCE[0]}" "${branch}" "${original_args[@]}"
+    prepare_deployment_environment
 
     for service in "${requested_services[@]}"; do
         validate_service "${service}"
@@ -55,16 +51,10 @@ main() {
         run_migrations
     fi
     if ((${#build_services[@]} > 0)); then
-        compose build "${build_services[@]}"
-        compose up -d --no-deps --force-recreate "${build_services[@]}"
-        for service in "${build_services[@]}"; do
-            wait_for_healthy "${service}"
-        done
+        rebuild_and_recreate_services "${build_services[@]}"
     fi
     if ((includes_nginx)); then
-        compose exec -T nginx nginx -t
-        compose up -d --no-deps --force-recreate nginx
-        wait_for_healthy nginx
+        recreate_nginx
     else
         refresh_nginx
     fi
