@@ -5,12 +5,12 @@
 保留现有 React、Nginx、NestJS、RabbitMQ、Worker 和 NDJSON 流式协议，只把
 FastAPI 内部从固定问答流水线升级为受控 LangGraph Agent。第一阶段支持：
 
-1. 生产问题分析：根据 Dify 知识、批准的 PostgreSQL/DB2 查询和多轮对话形成原因分析。
+1. 生产问题分析：根据自建知识库、批准的 PostgreSQL/DB2 查询和多轮对话形成原因分析。
 2. 报表生成：严格按用户明确指定的格式生成 Markdown、Word、PDF、Excel、JSON
    或 CSV；未指定格式时才使用 Planner 的默认集合，文件保存到 MinIO 并通过归属鉴权接口下载。
 3. 管理员平台数据整理：根据自然语言生成受限 PostgreSQL 查询，例如整理当前所有平台用户。
 
-用户可在前端按会话选择 PostgreSQL 或 DB2。DB2 未配置时 Agent 仍可使用 Dify 和大模型，但必须明确说明缺少生产数据，不能
+用户可在前端按会话选择 PostgreSQL 或 DB2。DB2 未配置时 Agent 仍可使用自建知识库和大模型，但必须明确说明缺少生产数据，不能
 虚构查询结果。通知 Tool 默认关闭，确定渠道和审批规则后才能启用。
 
 ## 2. 数据流程
@@ -23,7 +23,7 @@ React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI /process
                                         /              \
                            Incident Planner       Report Planner
                                       \              /
-                                       Dify Knowledge Tool
+                                    Enterprise Knowledge Tool
                                                 |
                          Fixed Query Tool / Admin Dynamic SQL Tool
                                                 |
@@ -39,7 +39,7 @@ React -> Nginx -> NestJS -> RabbitMQ -> Worker -> FastAPI /process
 Supervisor 当前使用稳定关键词分流；故障分析、报表生成、平台数据查询三个 Planner 使用选定的大模型生成结构化计划。
 后续可以继续增加设备、批次、质量、接口、库存等领域 Planner，而不改变外围协议。
 
-平台数据查询会识别用户、账号、角色和权限等目标，并直接进入受控数据库节点，不请求无关的 Dify 生产知识。管理员请求在动态表结构可用时必须生成 `dynamic_query`；若模型遗漏查询或生成的 SQL 未通过预校验，Planner 会改用最小安全用户清单查询，执行器仍会再次进行完整 AST 校验。查询成功后由后端确定性渲染 Markdown 表格，不再让第二次模型调用重新判断数据库证据是否存在。
+平台数据查询会识别用户、账号、角色和权限等目标，并直接进入受控数据库节点，不请求无关的知识库内容。管理员请求在动态表结构可用时必须生成 `dynamic_query`；若模型遗漏查询或生成的 SQL 未通过预校验，Planner 会改用最小安全用户清单查询，执行器仍会再次进行完整 AST 校验。查询成功后由后端确定性渲染 Markdown 表格，不再让第二次模型调用重新判断数据库证据是否存在。
 
 ## 3. 安全边界
 
@@ -57,9 +57,10 @@ Supervisor 当前使用稳定关键词分流；故障分析、报表生成、平
 - 两种数据库账号都应由 DBA 配置为只读；PostgreSQL 执行器还会强制开启只读事务。
 - 单次 Agent 查询数量、单条查询超时和返回行数均有限制。
 - 动态查询也会强制只读事务、查询超时和独立行数上限；日志只记录 SQL 指纹、表名、行数和状态，不记录 SQL 正文、参数值、数据正文和密钥。
-- Dify 文本和数据库数据都被视为不可信证据，不能覆盖系统指令。
+- 知识库文本和数据库数据都被视为不可信证据，不能覆盖系统指令。
+- 普通用户的向量查询强制过滤 `visibility=public`；只有服务端确认具有 `knowledge:manage` 权限的管理员可以检索管理员文档。
 - 通知同时要求用户明确提出、服务已启用、自动发送已启用，三项缺一不可。
-- DB2 DSN、Webhook 和 Dify/LLM Key 只在虚拟机 `/etc/enterprise-ai-platform/`。
+- DB2 DSN、Webhook 和 LLM/Embedding Key 只在虚拟机 `/etc/enterprise-ai-platform/`。
 
 ## 4. 外部配置文件
 
@@ -98,7 +99,11 @@ PostgreSQL 的 `POSTGRES_HOST/PORT/DB/USER/PASSWORD/SSLMODE` 直接复用
 
 当前“整理平台用户”使用现有平台 PostgreSQL 连接，无需再提供密码、表名或列名。若以后要开放其他业务表，应先提供表结构和敏感字段说明，再扩充代码中的动态查询白名单；不要把真实连接密码贴进聊天或提交到 Git。
 
-### 4.2 通用业务与查询目录
+### 4.2 知识库热配置
+
+`/etc/enterprise-ai-platform/knowledge-base.json` 权限为 `644`，不含密钥。`top_k`、阈值、候选倍数、语义权重、上下文长度及分块参数在每次操作时重新读取，修改无需重启。分块参数只影响新上传文档；已入库文档需重新上传才会使用新分块。Embedding 模型和维度在 `llm.env` 中，修改后必须重建全部向量。
+
+### 4.3 通用业务与查询目录
 
 真实文件：`/etc/enterprise-ai-platform/database-catalog.json`，模板见
 `deploy/database-catalog.example.json`。这个目录可以包含表和列名称，但生产环境建议仍

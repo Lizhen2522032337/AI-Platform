@@ -17,7 +17,7 @@ NestJS Auth + Backend          Gin Auth + Realtime
   +--> PostgreSQL
   +--> Redis
   +--> PostgreSQL 会话历史
-  +--> RabbitMQ --> Worker --> 读取最近对话 --> FastAPI --> Dify Knowledge
+  +--> RabbitMQ --> Worker --> 读取最近对话 --> FastAPI --> 自建 RAG / Qdrant
                                                         +--> DeepSeek / 通义千问
                            |       |
                            |       +--> Qdrant
@@ -37,13 +37,14 @@ enterprise-ai-platform/
 │   ├── nest-service/
 │   │   └── src/
 │   │       ├── auth/               JWT、Cookie、全局认证与权限 Guard
+│   │       ├── knowledge/          管理员上传、文档台账与可见性管理
 │   │       ├── infrastructure/     RabbitMQ、Redis 客户端
 │   │       ├── tasks/              带用户归属的任务业务模块
 │   │       └── users/              用户、角色和权限管理
 │   ├── fastapi-service/
 │   │   └── app/
 │   │       ├── config/             AI 服务配置
-│   │       ├── dify.py             Dify Knowledge API 安全检索
+│   │       ├── knowledge.py        文档解析、向量化、ACL 检索与热配置
 │   │       ├── integrations.py     Qdrant、MinIO 集成
 │   │       └── main.py             健康与 AI 处理接口
 │   ├── gin-service/
@@ -72,7 +73,7 @@ enterprise-ai-platform/
 5. Worker 确认收到任务，写入 `processing` 状态到 PostgreSQL 和 Redis。
 6. Worker 从 PostgreSQL 读取该会话最近若干轮已完成问答，组装 `user/assistant` 消息历史，再调用 FastAPI `/process`。
 7. FastAPI 的 LangGraph Supervisor 分流到故障分析 Planner 或报表 Planner；Planner 生成独立知识检索问题，并按前端选择的 PostgreSQL/DB2 方言选择批准查询 ID。
-8. Agent 依次调用 Dify Knowledge Tool 和统一只读数据库 Tool，汇总带来源的事实、推断与未知信息。
+8. Agent 调用自建 Knowledge Tool；Qdrant 在召回阶段按服务端权限过滤文档可见性，再与只读数据库证据汇总。
 9. FastAPI 把 Agent 证据作为受控参考资料，根据 `modelProvider` 调用 DeepSeek 或通义千问，并同时发送完整对话历史。
 10. FastAPI 读取供应商 SSE 并向 Worker 输出统一 NDJSON 增量；Worker 节流写入 Redis。
 11. Gin 验证 JWT、token 版本和 `ownerId`，每次状态变化都通过 SSE 把增量回答推给 React。
@@ -91,6 +92,6 @@ enterprise-ai-platform/
 
 ## 5. 当前 AI 实现边界
 
-本版本通过 LangGraph 显式状态图编排 Planner、Dify、PostgreSQL/DB2、报表文件和通知 Tool，再通过 OpenAI 兼容 Chat Completions 接入 DeepSeek 和阿里云百炼通义千问。数据库 Tool 只允许外部查询目录中的只读参数化 SQL；详细边界和必备资料见 `docs/agent-architecture.md`。Qdrant 当前仍使用演示向量；真正的知识检索由 Dify 完成。
+本版本通过 LangGraph 显式状态图编排 Planner、自建 RAG、PostgreSQL/DB2、报表文件和通知 Tool，再通过 OpenAI 兼容接口接入大模型及 Embedding 模型。知识原件写入 MinIO，台账写入 PostgreSQL，真实语义向量写入独立 Qdrant collection；数据库 Tool 仍只允许批准的只读参数化 SQL。
 
 DeepSeek 和通义千问的 Chat Completions 接口本身不替本项目保存历史。平台以 `chat_conversations` 和 `ai_tasks` 持久化会话，每次最多加载 `AI_CONTEXT_TURNS` 轮完整问答，默认 10、最大 20，以控制 Token 成本。旧的单轮任务在 `004_add_chat_conversations.sql` 中自动转换为独立历史会话。

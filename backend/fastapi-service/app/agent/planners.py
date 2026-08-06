@@ -24,7 +24,20 @@ from app.llm import LlmProviderError, ModelProvider, complete_json
 
 logger = logging.getLogger(__name__)
 _REPORT_WORDS = ("报表", "报告", "统计", "趋势", "汇总", "导出", "日报", "周报", "月报")
-_FILE_EXPORT_WORDS = ("导出", "下载", "excel", "xlsx", "word", "docx", "pdf", "csv", "文件", "文档", "报表", "报告")
+_FILE_EXPORT_WORDS = (
+    "导出",
+    "下载",
+    "excel",
+    "xlsx",
+    "word",
+    "docx",
+    "pdf",
+    "csv",
+    "文件",
+    "文档",
+    "报表",
+    "报告",
+)
 _NOTIFY_WORDS = ("通知", "发送", "推送", "告警")
 _PLATFORM_USER_WORDS = ("用户", "账号", "账户", "角色", "权限")
 _PLATFORM_TASK_WORDS = ("任务",)
@@ -58,9 +71,9 @@ ORDER BY t.created_at DESC
 def choose_intent(prompt: str) -> AgentIntent:
     """Supervisor 先做稳定的业务分流，避免每次多调用一次模型。"""
 
-    if any(word in prompt for word in (*_PLATFORM_USER_WORDS, *_PLATFORM_TASK_WORDS)) and any(
-        word in prompt for word in _PLATFORM_QUERY_WORDS
-    ):
+    if any(
+        word in prompt for word in (*_PLATFORM_USER_WORDS, *_PLATFORM_TASK_WORDS)
+    ) and any(word in prompt for word in _PLATFORM_QUERY_WORDS):
         return "platform_data_query"
     return (
         "report_generation"
@@ -72,7 +85,9 @@ def choose_intent(prompt: str) -> AgentIntent:
 def _history_text(messages: list[dict[str, str]]) -> str:
     """只给 Planner 最近对话，限制长度且不写入日志。"""
 
-    parts = [f"{message['role']}: {message['content'][:1200]}" for message in messages[-8:]]
+    parts = [
+        f"{message['role']}: {message['content'][:1200]}" for message in messages[-8:]
+    ]
     return "\n".join(parts)[-8000:]
 
 
@@ -115,7 +130,9 @@ def _fallback_plan(intent: AgentIntent, prompt: str) -> AgentPlan:
         hypotheses=[],
         queries=[],
         report_required=intent == "report_generation",
-        report_title="生产分析报告" if intent == "report_generation" else "生产问题分析",
+        report_title="生产分析报告"
+        if intent == "report_generation"
+        else "生产问题分析",
         notify=False,
     )
 
@@ -128,7 +145,7 @@ def _system_prompt(
     common = """
 你是企业生产系统的受控 Planner。你的职责是规划取证步骤，不负责直接回答。
 参数必须满足目录定义；信息不足时宁可不查询，并在 hypotheses 中说明缺失信息。
-knowledge_query 必须把多轮对话中的指代改写为可独立检索 Dify 的中文问题，最多250字。
+knowledge_query 必须把多轮对话中的指代改写为可独立检索企业知识库的中文问题，最多250字。
 只返回一个 JSON 对象，不要 Markdown、解释或代码块。JSON 字段必须是：
 intent, objective, knowledge_query, hypotheses, queries, dynamic_query,
 report_required, report_title, export_formats, notify。export_formats 只能包含
@@ -219,7 +236,9 @@ async def create_plan(
     allowed_ids = {
         query.id for query in catalog.queries if query.supports(database_type)
     }
-    approved_queries = [query for query in plan.queries if query.query_id in allowed_ids]
+    approved_queries = [
+        query for query in plan.queries if query.query_id in allowed_ids
+    ]
     rejected_count = len(plan.queries) - len(approved_queries)
     if rejected_count:
         logger.warning(
@@ -241,7 +260,9 @@ async def create_plan(
                 )
                 plan.dynamic_query = None
         if plan.dynamic_query is None:
-            logger.warning("Platform data planner omitted dynamic SQL; safe fallback used")
+            logger.warning(
+                "Platform data planner omitted dynamic SQL; safe fallback used"
+            )
             is_task_query = any(word in prompt for word in _PLATFORM_TASK_WORDS)
             plan.dynamic_query = DynamicSqlQuery(
                 purpose=(

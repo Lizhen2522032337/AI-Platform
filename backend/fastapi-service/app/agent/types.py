@@ -53,6 +53,7 @@ class AgentState(TypedDict, total=False):
     provider: str
     database_type: DatabaseType
     allow_dynamic_sql: bool
+    allow_admin_knowledge: bool
     messages: list[dict[str, str]]
     intent: AgentIntent
     plan: dict[str, Any]

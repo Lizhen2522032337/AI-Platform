@@ -87,6 +87,7 @@ describe('TasksService', () => {
       modelProvider: 'deepseek',
       databaseType: 'postgresql',
       allowDynamicSql: false,
+      allowAdminKnowledge: false,
       conversationId: null,
       createdAt: '2026-07-26T00:00:00.000Z',
     });

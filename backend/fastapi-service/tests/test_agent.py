@@ -18,7 +18,7 @@ from app.agent.dynamic_sql_tool import (
 from app.agent.report_tools import create_report_files
 from app.agent.types import AgentPlan, DynamicSqlQuery
 from app.config.settings import Settings
-from app.dify import KnowledgeResult
+from app.knowledge import KnowledgeResult
 from openpyxl import load_workbook
 
 
@@ -53,12 +53,18 @@ def test_db2_tool_accepts_select_and_with() -> None:
     _assert_read_only_sql("WITH X AS (SELECT ID FROM PROD.STATE) SELECT ID FROM X")
 
 
-def test_report_file_tool_creates_office_pdf_json_and_dynamic_sql_csv(monkeypatch) -> None:
+def test_report_file_tool_creates_office_pdf_json_and_dynamic_sql_csv(
+    monkeypatch,
+) -> None:
     stored = []
 
     def fake_save_file(object_key, payload, content_type):
         stored.append((object_key, payload, content_type))
-        return {"objectKey": object_key, "contentType": content_type, "size": len(payload)}
+        return {
+            "objectKey": object_key,
+            "contentType": content_type,
+            "size": len(payload),
+        }
 
     monkeypatch.setattr("app.agent.report_tools.save_file", fake_save_file)
     artifacts = create_report_files(
@@ -93,7 +99,11 @@ def test_report_file_tool_only_creates_requested_excel(monkeypatch) -> None:
 
     def fake_save_file(object_key, payload, content_type):
         stored.append((object_key, payload, content_type))
-        return {"objectKey": object_key, "contentType": content_type, "size": len(payload)}
+        return {
+            "objectKey": object_key,
+            "contentType": content_type,
+            "size": len(payload),
+        }
 
     monkeypatch.setattr("app.agent.report_tools.save_file", fake_save_file)
     artifacts = create_report_files(
@@ -140,8 +150,9 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
             report_title="生产日报",
         )
 
-    async def fake_retrieve(query):
+    async def fake_retrieve(query, allow_admin=False):
         assert query == "生产日报指标"
+        assert allow_admin is False
         return KnowledgeResult(True, "[知识库 1]\n日报口径", 1)
 
     monkeypatch.setattr(graph, "create_plan", fake_create_plan)
@@ -161,7 +172,7 @@ def test_langgraph_routes_report_and_builds_evidence(monkeypatch) -> None:
     assert prepared.intent == "report_generation"
     assert prepared.plan.report_required is True
     assert "日报口径" in prepared.context
-    assert any(step["id"] == "dify_knowledge" for step in trace_steps)
+    assert any(step["id"] == "knowledge_retrieval" for step in trace_steps)
     assert all("日报口径" not in str(step) for step in trace_steps)
 
 
@@ -481,7 +492,9 @@ def test_platform_task_planner_supplies_safe_query_when_model_omits_it(
     assert tables == ["public.ai_tasks", "public.app_users"]
 
 
-def test_platform_planner_forces_report_files_when_user_requests_excel(monkeypatch) -> None:
+def test_platform_planner_forces_report_files_when_user_requests_excel(
+    monkeypatch,
+) -> None:
     async def fake_complete_json(_provider, _system_prompt, _user_prompt):
         return {
             "intent": "platform_data_query",
@@ -611,10 +624,9 @@ def test_admin_platform_query_runs_dynamic_sql_through_full_graph(monkeypatch) -
         for step in traces
     )
     assert any(
-        step["id"] == "dynamic_sql" and step["status"] == "completed"
-        for step in traces
+        step["id"] == "dynamic_sql" and step["status"] == "completed" for step in traces
     )
-    assert all(step["id"] != "dify_knowledge" for step in traces)
+    assert all(step["id"] != "knowledge_retrieval" for step in traces)
 
 
 def test_database_node_executes_admin_dynamic_sql(monkeypatch) -> None:

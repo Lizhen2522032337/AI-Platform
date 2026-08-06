@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "collection_name": "enterprise_knowledge",
+  "chunk_size": 900,
+  "chunk_overlap": 150,
+  "top_k": 5,
+  "candidate_multiplier": 3,
+  "score_threshold": 0.25,
+  "semantic_weight": 0.85,
+  "max_context_chars": 14000,
+  "max_file_bytes": 20971520,
+  "embedding_batch_size": 16
+}

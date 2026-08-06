@@ -135,15 +135,7 @@ data: {"id":12,"status":"processing","modelProvider":"deepseek","modelName":"dee
 
 ### 2.1 FastAPI AI 服务
 
-FastAPI 在调用模型前运行 LangGraph Agent。Supervisor 选择故障分析或报表 Planner，Planner 将多轮指代改写为独立检索问题，并根据用户选择的 PostgreSQL/DB2 方言，从外部批准目录中选择查询。Agent 根据 `DIFY_ENABLED` 决定是否请求 Dify Knowledge API：
-
-```text
-POST {DIFY_BASE_URL}/datasets/{DIFY_DATASET_ID}/retrieve
-Authorization: Bearer {DIFY_API_KEY}
-```
-
-请求包含 Planner 生成的独立知识检索问题。返回知识块按 `DIFY_SCORE_THRESHOLD`、`DIFY_TOP_K` 和
-`DIFY_MAX_CONTEXT_CHARS` 过滤后注入系统提示词。Key、问题正文和知识块正文均不会写入日志。
+FastAPI 在调用模型前运行 LangGraph Agent。Planner 将多轮指代改写为独立检索问题，使用 Embedding API 生成查询向量，并在 Qdrant 查询阶段按 `allowAdminKnowledge` 执行可见性过滤。召回结果再按热配置中的阈值、候选倍数和语义/关键词权重重排后注入系统提示词。
 
 | 方法 | 内部路径 | 说明 |
 | --- | --- | --- |
@@ -151,6 +143,9 @@ Authorization: Bearer {DIFY_API_KEY}
 | POST | `http://fastapi-service:8000/process` | 调用选定大模型并返回 NDJSON 增量流 |
 | POST | `http://fastapi-service:8000/artifacts/download` | 供 NestJS 内部读取已校验的任务文件 |
 | DELETE | `http://fastapi-service:8000/artifacts/tasks` | 供 NestJS 内部清理 Qdrant 与 MinIO 任务产物 |
+| POST | `http://fastapi-service:8000/knowledge/documents/ingest` | 解析并索引管理员已鉴权上传的文档 |
+| PATCH | `http://fastapi-service:8000/knowledge/documents/visibility` | 批量更新文档分块 ACL |
+| DELETE | `http://fastapi-service:8000/knowledge/documents` | 删除文档向量和原文件 |
 
 请求：
 
@@ -161,6 +156,7 @@ Authorization: Bearer {DIFY_API_KEY}
   "modelProvider": "deepseek",
   "databaseType": "postgresql",
   "allowDynamicSql": true,
+  "allowAdminKnowledge": true,
   "messages": [
     { "role": "user", "content": "上一轮问题" },
     { "role": "assistant", "content": "上一轮回答" },
@@ -169,14 +165,14 @@ Authorization: Bearer {DIFY_API_KEY}
 }
 ```
 
-`allowDynamicSql` 不是外部 API 参数，而是 NestJS 根据当前登录用户是否具有 `users:manage` 权限生成并经 RabbitMQ、Worker 传入 FastAPI。普通用户始终为 `false`；FastAPI 还会执行独立的 SQL AST 和白名单校验，不能依赖该布尔值作为唯一安全边界。
+`allowDynamicSql` 和 `allowAdminKnowledge` 都不是外部 API 参数，而是 NestJS 根据当前登录用户权限生成并经 RabbitMQ、Worker 传入 FastAPI。前者仍有独立 SQL AST 白名单校验；后者在 Qdrant 查询阶段强制加入文档可见性过滤。
 
 响应媒体类型为 `application/x-ndjson`，每行一个事件：
 
 ```text
 {"type":"trace","step":{"id":"dynamic_sql_access","title":"检查动态数据库查询权限","status":"completed","kind":"tool","toolName":"dynamic_sql","detail":"管理员动态 SQL 查询已授权，并将继续执行 AST 白名单校验"}}
 {"type":"trace","step":{"id":"planner","title":"制定受控执行计划","status":"completed","kind":"stage","detail":"计划输出分析结论，选择 2 个批准查询","durationMs":842}}
-{"type":"trace","step":{"id":"dify_knowledge","title":"检索企业知识库","status":"running","kind":"tool","toolName":"dify_knowledge"}}
+{"type":"trace","step":{"id":"knowledge_retrieval","title":"检索企业知识库","status":"running","kind":"tool","toolName":"knowledge_retrieval"}}
 {"type":"start","provider":"deepseek","model":"deepseek-v4-flash"}
 {"type":"delta","text":"第一段"}
 {"type":"delta","text":"第二段"}
@@ -184,9 +180,9 @@ Authorization: Bearer {DIFY_API_KEY}
 {"type":"complete","result":{"taskId":12,"text":"第一段第二段","provider":"deepseek","model":"deepseek-v4-flash","vectorId":"12","objectKey":"tasks/12/result.json"}}
 ```
 
-`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，跳过无关的 Dify 知识检索，并使用 `platform_data_renderer` 将已校验行确定性渲染为 Markdown 表格。
+`trace` 是面向用户的可审计执行摘要，状态为 `running`、`completed`、`failed` 或 `skipped`。它可以包含阶段名、Tool 名、动态查询权限状态、返回行数/知识块数和耗时，但禁止包含隐藏思维链、提示词全文、SQL、查询参数、数据库正文、密钥或供应商原始响应。平台用户查询会显示为“平台数据查询”，跳过无关的知识库检索，并使用 `platform_data_renderer` 将已校验行确定性渲染为 Markdown 表格。
 
-FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成时，Worker 会用完整 `answer` 覆盖 Redis 中的 `partialText`，避免节流中的最后一段未刷新到前端。任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务严格按用户明确指定的格式写入 MinIO，未指定格式时才使用默认格式集合；任务的 `answer`、模型信息、数据库类型和结果元数据由 Worker 写入 PostgreSQL。当前 Qdrant 仍使用 SHA-256 生成固定 8 维演示向量，后续可单独接入真实 Embedding。
+FastAPI 解析 DeepSeek/千问的 SSE，但不向浏览器暴露供应商 Key。Worker 读取 NDJSON 后把 `partialText` 和完整 `executionTrace` 写入 Redis，Gin 再向浏览器推送；任务完成时，Worker 会用完整 `answer` 覆盖 Redis 中的 `partialText`，避免节流中的最后一段未刷新到前端。任务完成或失败时，轨迹同时写入 PostgreSQL 的 `result.executionTrace`，刷新页面后仍可查看。报表任务严格按用户明确指定的格式写入 MinIO，未指定格式时才使用默认格式集合。任务结果索引仍使用独立的 8 维审计 collection；知识库使用真实 Embedding 向量，两者不会混用。
 
 ### 2.2 RabbitMQ 消息
 

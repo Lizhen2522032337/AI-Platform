@@ -13,6 +13,7 @@ readonly -a REQUIRED_BASE_IMAGE_VARIABLES=(
     RABBITMQ_IMAGE QDRANT_IMAGE MINIO_IMAGE MINIO_MC_IMAGE
 )
 readonly DATABASE_CATALOG_PATH="/etc/enterprise-ai-platform/database-catalog.json"
+readonly KNOWLEDGE_CONFIG_PATH="/etc/enterprise-ai-platform/knowledge-base.json"
 
 check_database_catalog_permissions() {
     local config_dir directory_mode catalog_mode
@@ -35,6 +36,26 @@ check_database_catalog_permissions() {
     fi
 }
 
+check_knowledge_config_permissions() {
+    local config_dir directory_mode config_mode
+
+    [[ -e "${KNOWLEDGE_CONFIG_PATH}" ]] \
+        || die "缺少知识库热配置：${KNOWLEDGE_CONFIG_PATH}；请从 deploy/knowledge-base.example.json 创建"
+    require_command stat
+    require_command python3
+    config_dir="$(dirname -- "${KNOWLEDGE_CONFIG_PATH}")"
+    directory_mode="$(stat -c '%a' "${config_dir}")"
+    config_mode="$(stat -c '%a' "${KNOWLEDGE_CONFIG_PATH}")"
+    if (( (8#${directory_mode} & 1) == 0 )); then
+        die "${config_dir} 阻止非 root 容器访问；请执行：chmod 711 ${config_dir}"
+    fi
+    if (( (8#${config_mode} & 4) == 0 )); then
+        die "${KNOWLEDGE_CONFIG_PATH} 对 FastAPI 不可读；请执行：chmod 644 ${KNOWLEDGE_CONFIG_PATH}"
+    fi
+    python3 -m json.tool "${KNOWLEDGE_CONFIG_PATH}" >/dev/null \
+        || die "${KNOWLEDGE_CONFIG_PATH} 不是有效 JSON"
+}
+
 main() {
     local variable value available_kb minimum_kb
 
@@ -44,6 +65,7 @@ main() {
     ensure_database_env
     ensure_platform_env
     check_database_catalog_permissions
+    check_knowledge_config_permissions
     require_command docker
     require_command sha256sum
     docker buildx version >/dev/null 2>&1 || die '缺少 Docker Buildx/BuildKit'

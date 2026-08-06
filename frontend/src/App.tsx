@@ -26,6 +26,7 @@ import { authApi } from "./api/auth";
 import { conversationsApi } from "./api/conversations";
 import { tasksApi } from "./api/tasks";
 import { AdminUsersPanel } from "./components/AdminUsersPanel";
+import { AdminKnowledgePanel } from "./components/AdminKnowledgePanel";
 import { ExecutionTrace } from "./components/ExecutionTrace";
 import { LoginScreen } from "./components/LoginScreen";
 import type { AuthUser } from "./types/auth";
@@ -107,6 +108,8 @@ function App() {
   const [error, setError] = useState("");
   // showAdmin: true 时右侧主区域切换到管理员用户面板。
   const [showAdmin, setShowAdmin] = useState(false);
+  // showKnowledge: true 时展示管理员知识库入口。
+  const [showKnowledge, setShowKnowledge] = useState(false);
   // sidebarOpen: 移动端侧栏的开关状态。
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -196,7 +199,7 @@ function App() {
    * showAdmin 为 true 时不加载（因为主区域展示的是管理员面板，非对话界面）。
    */
   const loadConversation = useCallback(async () => {
-    if (!activeConversationId || showAdmin) return;
+    if (!activeConversationId || showAdmin || showKnowledge) return;
     setLoading(true);
     try {
       const detail = await conversationsApi.detail(activeConversationId);
@@ -230,7 +233,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [activeConversationId, showAdmin]);
+  }, [activeConversationId, showAdmin, showKnowledge]);
 
   // ===========================================================================
   // Effect：轮询刷新 — 10 秒间隔拉取会话消息（SSE 的兜底机制）
@@ -239,7 +242,7 @@ function App() {
   // SSE 负责实时推送流式 token 和执行轨迹，轮询负责纠正因网络异常导致的遗漏。
   // 切换到管理员面板或无活跃会话时停止轮询。
   useEffect(() => {
-    if (!activeConversationId || showAdmin) {
+    if (!activeConversationId || showAdmin || showKnowledge) {
       return;
     }
     const initial = window.setTimeout(() => void loadConversation(), 0);
@@ -248,7 +251,7 @@ function App() {
       window.clearTimeout(initial);
       window.clearInterval(poll);
     };
-  }, [activeConversationId, loadConversation, showAdmin]);
+  }, [activeConversationId, loadConversation, showAdmin, showKnowledge]);
 
   // ===========================================================================
   // 实时状态跟踪（SSE + 计算属性）
@@ -360,6 +363,7 @@ function App() {
     setPrompt("");
     setError("");
     setShowAdmin(false);
+    setShowKnowledge(false);
     setSidebarOpen(false);
   }
 
@@ -541,6 +545,7 @@ function App() {
   // 权限位提前计算，用于控制管理员按钮和任务提交按钮的显隐
   const canCreateTask = user.permissions.includes("tasks:create");
   const canManageUsers = user.permissions.includes("users:manage");
+  const canManageKnowledge = user.permissions.includes("knowledge:manage");
   const activeConversation = conversations.find(
     (item) => item.id === activeConversationId,
   );
@@ -588,7 +593,7 @@ function App() {
           ) : (
             conversations.map((conversation) => {
               const selected =
-                !showAdmin && conversation.id === activeConversationId;
+                !showAdmin && !showKnowledge && conversation.id === activeConversationId;
               const deleting = deletingConversationId === conversation.id;
               // 当前活跃会话中有正在处理的任务时，禁止删除
               const hasActiveTask = selected && Boolean(activeTask);
@@ -602,6 +607,7 @@ function App() {
                     className="conversation-link"
                     onClick={() => {
                       setShowAdmin(false);
+                      setShowKnowledge(false);
                       setActiveConversationId(conversation.id);
                       setTasks([]); // 先清空旧消息，触发 loadConversation 重新拉取
                       setSidebarOpen(false);
@@ -638,12 +644,27 @@ function App() {
               className={`sidebar-action ${showAdmin ? "active" : ""}`}
               onClick={() => {
                 setShowAdmin(true);
+                setShowKnowledge(false);
                 setTasks([]);
                 setSidebarOpen(false);
               }}
               type="button"
             >
               <span>⚙</span> 用户与权限
+            </button>
+          )}
+          {canManageKnowledge && (
+            <button
+              className={`sidebar-action ${showKnowledge ? "active" : ""}`}
+              onClick={() => {
+                setShowKnowledge(true);
+                setShowAdmin(false);
+                setTasks([]);
+                setSidebarOpen(false);
+              }}
+              type="button"
+            >
+              <span>▣</span> 企业知识库
             </button>
           )}
           <div className="account-row">
@@ -679,18 +700,20 @@ function App() {
           </button>
           <div className="header-title">
             <strong>
-              {showAdmin
-                ? "用户与权限"
+              {showKnowledge
+                ? "企业知识库"
+                : showAdmin
+                  ? "用户与权限"
                 : (activeConversation?.title ?? "新对话")}
             </strong>
-            {!showAdmin && (
+            {!showAdmin && !showKnowledge && (
               <small>
                 {activeTask ? "AI 正在回答…" : "消息通过企业异步链路安全处理"}
               </small>
             )}
           </div>
           {/* 非管理员模式下显示模型和数据库选择器；任务处理中禁用切换 */}
-          {!showAdmin && (
+          {!showAdmin && !showKnowledge && (
             <div className="header-selects">
               <select
                 aria-label="选择查询数据库"
@@ -721,7 +744,11 @@ function App() {
         </header>
 
         {/* showAdmin 为 true → 渲染管理员面板 */}
-        {showAdmin ? (
+        {showKnowledge ? (
+          <div className="admin-view">
+            <AdminKnowledgePanel />
+          </div>
+        ) : showAdmin ? (
           <div className="admin-view">
             <AdminUsersPanel currentUserId={user.id} />
           </div>

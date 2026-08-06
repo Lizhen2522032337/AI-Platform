@@ -1,4 +1,4 @@
-"""集中读取 FastAPI 的基础设施、大模型和 Dify 知识库配置。
+"""集中读取 FastAPI 的基础设施、大模型和自建知识库配置。
 
 真实密钥由虚拟机上的 ``llm.env`` 和 ``agent.env`` 注入。
 本模块只声明配置结构，不把密钥打印到日志，也不允许浏览器直接获取配置。
@@ -31,16 +31,14 @@ class Settings(BaseSettings):
     qwen_base_url: str
     qwen_model: str = "qwen-plus"
 
-    # Dify Knowledge API。关闭时保持原有直接调用大模型的行为。
-    # 开启时必须同时配置 API Key 和 Dataset ID。
-    dify_enabled: bool = False
-    dify_api_key: SecretStr | None = None
-    dify_base_url: str = "https://api.dify.ai/v1"
-    dify_dataset_id: str | None = None
-    dify_top_k: int = 4
-    dify_score_threshold: float = 0.3
-    dify_request_timeout_seconds: float = 20
-    dify_max_context_chars: int = 12000
+    # 自建 RAG 使用 OpenAI 兼容的 Embeddings API。密钥和模型属于静态基础设施
+    # 配置；检索 top_k、阈值、分块长度等可热调整参数放在下方 JSON 文件中。
+    embedding_api_key: SecretStr | None = None
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_model: str = "text-embedding-v4"
+    embedding_dimension: int = 1024
+    embedding_request_timeout_seconds: float = 60
+    knowledge_config_file: str = "/etc/enterprise-ai-platform/knowledge-base.json"
 
     # LangGraph Agent 的执行边界。Planner 只能选择外部目录中登记的查询，
     # 不能把模型生成的任意 SQL 直接交给生产 DB2。
@@ -52,7 +50,7 @@ class Settings(BaseSettings):
     dynamic_sql_max_rows: int = 200
 
     # Agent 数据库连接统一由虚拟机 Git 外配置注入。PostgreSQL 默认使用 Compose
-    # 服务名 postgres；DB2 默认关闭，未提供配置时仍可使用 Dify 完成普通问答。
+    # 服务名 postgres；DB2 默认关闭，未提供配置时仍可使用企业知识库完成普通问答。
     postgres_enabled: bool = True
     postgres_host: str = "postgres"
     postgres_port: int = 5432

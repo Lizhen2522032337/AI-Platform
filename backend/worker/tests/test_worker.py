@@ -43,10 +43,12 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
         provider,
         database_type,
         allow_dynamic_sql,
+        allow_admin_knowledge,
         messages,
     ):
         assert database_type == "postgresql"
         assert allow_dynamic_sql is True
+        assert allow_admin_knowledge is True
         assert messages[-1]["content"] == "测试"
         return iter(
             [
@@ -110,6 +112,7 @@ def test_process_message_updates_processing_and_completed(monkeypatch) -> None:
                 "modelProvider": "qwen",
                 "databaseType": "postgresql",
                 "allowDynamicSql": True,
+                "allowAdminKnowledge": True,
                 "conversationId": 5,
             }
         ).encode()
@@ -141,7 +144,9 @@ def test_process_message_keeps_trace_when_ai_service_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "load_conversation_messages",
-        lambda _conversation_id, _task_id, prompt: [{"role": "user", "content": prompt}],
+        lambda _conversation_id, _task_id, prompt: [
+            {"role": "user", "content": prompt}
+        ],
     )
     monkeypatch.setattr(
         main,
@@ -151,7 +156,7 @@ def test_process_message_keeps_trace_when_ai_service_fails(monkeypatch) -> None:
                 {
                     "type": "trace",
                     "step": {
-                        "id": "dify_knowledge",
+                        "id": "knowledge_retrieval",
                         "title": "检索企业知识库",
                         "status": "failed",
                         "kind": "tool",
@@ -176,6 +181,5 @@ def test_process_message_keeps_trace_when_ai_service_fails(monkeypatch) -> None:
         )
 
     assert any(
-        step["id"] == "dify_knowledge"
-        for step in captured.value.execution_trace
+        step["id"] == "knowledge_retrieval" for step in captured.value.execution_trace
     )

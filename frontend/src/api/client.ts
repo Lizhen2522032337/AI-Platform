@@ -36,6 +36,7 @@ export async function request<T>(
   init?: RequestInit,
   suppressUnauthorizedEvent = false,
 ): Promise<T> {
+  const hasFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData
   // 统一添加 /api 前缀，经过 Nginx 反向代理到各后端服务。
   // Cookie（含 JWT）由浏览器自动携带，JS 无法读取，防 XSS。
   const response = await fetch(`/api${path}`, {
@@ -43,7 +44,7 @@ export async function request<T>(
     credentials: 'same-origin', // 同源请求自动携带 Cookie
     headers: {
       Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.body && !hasFormData ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },
   })

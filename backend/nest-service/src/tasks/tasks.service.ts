@@ -121,6 +121,8 @@ export class TasksService {
         databaseType: task.databaseType,
         // 动态用户 SQL 只能由服务端 RBAC 授权，不能信任前端请求字段。
         allowDynamicSql: user.permissions.includes('users:manage'),
+        // 知识库权限随任务进入可信队列，FastAPI 据此在向量查询阶段执行 ACL。
+        allowAdminKnowledge: user.permissions.includes('knowledge:manage'),
         conversationId,
         createdAt: task.createdAt.toISOString(),
       });

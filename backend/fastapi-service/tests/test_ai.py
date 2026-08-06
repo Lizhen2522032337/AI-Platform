@@ -32,11 +32,13 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
         messages,
         database_type,
         allow_dynamic_sql,
+        allow_admin_knowledge,
         trace_callback,
     ):
         assert (task_id, prompt, provider) == (7, "测试任务", "qwen")
         assert database_type == "postgresql"
         assert allow_dynamic_sql is True
+        assert allow_admin_knowledge is True
         assert messages[-1] == {"role": "user", "content": "测试任务"}
         trace_callback(
             {
@@ -70,7 +72,9 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
         yield {"type": "delta", "text": "处理"}
         yield {"type": "delta", "text": "完成"}
 
-    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(agent_enabled=True))
+    monkeypatch.setattr(
+        main, "get_settings", lambda: SimpleNamespace(agent_enabled=True)
+    )
     monkeypatch.setattr(main, "prepare_agent", fake_prepare)
     monkeypatch.setattr(main, "stream_chat", fake_stream)
     monkeypatch.setattr(
@@ -95,6 +99,7 @@ def test_process_streams_and_saves_ai_result(monkeypatch) -> None:
             "prompt": "测试任务",
             "modelProvider": "qwen",
             "allowDynamicSql": True,
+            "allowAdminKnowledge": True,
             "messages": [
                 {"role": "user", "content": "你好"},
                 {"role": "assistant", "content": "你好，有什么可以帮你？"},
@@ -120,10 +125,12 @@ def test_platform_data_query_renders_rows_without_second_llm(monkeypatch) -> Non
         messages,
         database_type,
         allow_dynamic_sql,
+        allow_admin_knowledge,
         trace_callback,
     ):
         assert task_id == 8
         assert allow_dynamic_sql is True
+        assert allow_admin_knowledge is False
         return AgentPreparation(
             intent="platform_data_query",
             plan=AgentPlan(
@@ -160,7 +167,9 @@ def test_platform_data_query_renders_rows_without_second_llm(monkeypatch) -> Non
         raise AssertionError("平台数据查询不应再次调用大模型")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(agent_enabled=True))
+    monkeypatch.setattr(
+        main, "get_settings", lambda: SimpleNamespace(agent_enabled=True)
+    )
     monkeypatch.setattr(main, "prepare_agent", fake_prepare)
     monkeypatch.setattr(main, "stream_chat", forbidden_stream_chat)
     monkeypatch.setattr(

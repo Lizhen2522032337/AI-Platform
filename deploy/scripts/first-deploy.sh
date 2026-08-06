@@ -12,6 +12,7 @@ main() {
     ensure_docker_compose
     ensure_database_env
     ensure_platform_env
+    ensure_knowledge_config
     acquire_deploy_lock
     compose config --quiet
     run_preflight

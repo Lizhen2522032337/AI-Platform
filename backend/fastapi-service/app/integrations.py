@@ -100,7 +100,7 @@ def check_integrations() -> None:
 def _vector_for(text: str) -> list[float]:
     """生成固定 8 维演示向量。
 
-    这是可重复的占位实现，不具备语义检索能力；Dify 承担当前真正的知识检索。
+    这是可重复的任务审计占位向量；真正的语义检索使用 knowledge.py 的独立集合。
     """
 
     digest = hashlib.sha256(text.encode("utf-8")).digest()

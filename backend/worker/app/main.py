@@ -30,9 +30,7 @@ class TaskExecutionError(RuntimeError):
         self.execution_trace = execution_trace
 
 
-def merge_trace_step(
-    trace: list[dict[str, Any]], step: dict[str, Any]
-) -> None:
+def merge_trace_step(trace: list[dict[str, Any]], step: dict[str, Any]) -> None:
     """按步骤 ID 合并运行中和最终状态。"""
 
     step_id = str(step.get("id") or "")
@@ -184,6 +182,7 @@ def stream_ai_service(
     model_provider: str,
     database_type: str,
     allow_dynamic_sql: bool,
+    allow_admin_knowledge: bool,
     messages: list[dict[str, str]],
 ) -> Iterator[dict[str, Any]]:
     """逐行读取内部 FastAPI 返回的 NDJSON 大模型事件流。"""
@@ -196,6 +195,7 @@ def stream_ai_service(
             "modelProvider": model_provider,
             "databaseType": database_type,
             "allowDynamicSql": allow_dynamic_sql,
+            "allowAdminKnowledge": allow_admin_knowledge,
             "messages": messages,
         }
     ).encode("utf-8")
@@ -236,6 +236,7 @@ def process_message(body: bytes) -> None:
     database_type = str(message.get("databaseType") or "postgresql")
     # 只接受 NestJS 写入 RabbitMQ 的 JSON 布尔值；缺省和其他类型均按无权限处理。
     allow_dynamic_sql = message.get("allowDynamicSql") is True
+    allow_admin_knowledge = message.get("allowAdminKnowledge") is True
     conversation_id_value = message.get("conversationId")
     conversation_id = (
         int(conversation_id_value) if conversation_id_value is not None else None
@@ -301,6 +302,7 @@ def process_message(body: bytes) -> None:
             model_provider,
             database_type,
             allow_dynamic_sql,
+            allow_admin_knowledge,
             messages,
         ):
             event_type = event.get("type")
@@ -447,7 +449,9 @@ def consume() -> None:
         heartbeat=30,
         blocked_connection_timeout=30,
     )
-    logger.info("connecting to RabbitMQ: host=%s port=%s", parameters.host, parameters.port)
+    logger.info(
+        "connecting to RabbitMQ: host=%s port=%s", parameters.host, parameters.port
+    )
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
     queue = os.getenv("RABBITMQ_TASK_QUEUE", "ai_tasks")
@@ -520,7 +524,9 @@ def consume() -> None:
                 current_channel.basic_ack(delivery_tag=method.delivery_tag)
             except Exception:
                 logger.exception("failed to persist error; task will be requeued")
-                current_channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                current_channel.basic_nack(
+                    delivery_tag=method.delivery_tag, requeue=True
+                )
 
     channel.basic_consume(queue=queue, on_message_callback=callback)
     redis_client.ping()

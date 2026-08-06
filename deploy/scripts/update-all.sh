@@ -13,6 +13,7 @@ main() {
     ensure_docker_compose
     ensure_database_env
     ensure_platform_env
+    ensure_knowledge_config
     run_preflight
     start_database_if_managed
     start_infrastructure

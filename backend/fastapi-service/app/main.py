@@ -1,6 +1,7 @@
 """FastAPI AI 服务入口。"""
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -18,8 +19,14 @@ from app.agent.platform_data_renderer import render_platform_data_answer
 from app.agent.report_tools import create_report_files
 from app.agent.types import DatabaseType
 from app.config.settings import get_settings
-from app.dify import DifyKnowledgeError, retrieve_knowledge
 from app.integrations import check_integrations, delete_results, read_file, save_result
+from app.knowledge import (
+    KnowledgeBaseError,
+    delete_document,
+    ingest_document,
+    retrieve_knowledge,
+    update_document_visibility,
+)
 from app.llm import ChatMessage, LlmProviderError, ModelProvider, stream_chat
 
 # 统一 FastAPI 及其子模块日志级别；生产日志不包含提示词、知识正文或密钥。
@@ -46,6 +53,8 @@ class ProcessRequest(BaseModel):
     database_type: DatabaseType = Field(default="postgresql", alias="databaseType")
     # 该权限只能由 NestJS 根据服务端 RBAC 写入 RabbitMQ，前端不能直接调用本接口。
     allow_dynamic_sql: bool = Field(default=False, alias="allowDynamicSql")
+    # 与动态 SQL 一样，只接受由 NestJS 根据服务端权限写入的布尔值。
+    allow_admin_knowledge: bool = Field(default=False, alias="allowAdminKnowledge")
     messages: list[ConversationMessage] = Field(min_length=1, max_length=41)
 
 
@@ -89,6 +98,25 @@ class DownloadArtifactRequest(BaseModel):
         return self
 
 
+class KnowledgeIngestRequest(BaseModel):
+    """NestJS 已鉴权后提交的知识文档。"""
+
+    document_id: int = Field(alias="documentId", gt=0)
+    title: str = Field(min_length=1, max_length=200)
+    file_name: str = Field(alias="fileName", min_length=1, max_length=255)
+    content_type: str = Field(alias="contentType", max_length=150)
+    visibility: Literal["public", "admin"]
+    content_base64: str = Field(alias="contentBase64", min_length=1)
+
+
+class KnowledgeMutationRequest(BaseModel):
+    """知识文档删除或权限变更请求。"""
+
+    document_id: int = Field(alias="documentId", gt=0)
+    object_key: str | None = Field(default=None, alias="objectKey", max_length=500)
+    visibility: Literal["public", "admin"] | None = None
+
+
 app = FastAPI(title="Enterprise AI Service", version="1.0.0")
 
 
@@ -117,9 +145,7 @@ def ndjson(event: dict[str, object]) -> bytes:
     return (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-def merge_trace_step(
-    trace: list[dict[str, object]], step: dict[str, object]
-) -> None:
+def merge_trace_step(trace: list[dict[str, object]], step: dict[str, object]) -> None:
     """按稳定步骤 ID 更新轨迹，避免 running/completed 在前台重复出现。"""
 
     step_id = str(step.get("id") or "")
@@ -165,6 +191,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                     history,
                     payload.database_type,
                     allow_dynamic_sql=payload.allow_dynamic_sql,
+                    allow_admin_knowledge=payload.allow_admin_knowledge,
                     trace_callback=trace_queue.put_nowait,
                 )
             )
@@ -184,18 +211,21 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 len(preparation.plan.queries),
             )
         else:
-            # 保留紧急回退开关：关闭 Agent 时仍使用原来的 Dify → LLM 流程。
+            # 保留紧急回退开关：关闭 Agent 时仍执行自建知识库 → LLM 流程。
             retrieval_started = time.perf_counter()
             retrieval_step: dict[str, object] = {
-                "id": "dify_knowledge",
+                "id": "knowledge_retrieval",
                 "title": "检索企业知识库",
                 "status": "running",
                 "kind": "tool",
-                "toolName": "dify_knowledge",
+                "toolName": "knowledge_retrieval",
             }
             merge_trace_step(execution_trace, retrieval_step)
             yield ndjson({"type": "trace", "step": retrieval_step})
-            knowledge = await retrieve_knowledge(payload.prompt)
+            knowledge = await retrieve_knowledge(
+                payload.prompt,
+                allow_admin=payload.allow_admin_knowledge,
+            )
             evidence_context = knowledge.context
             if knowledge.enabled and not evidence_context:
                 evidence_context = "[知识库检索结果]\n本次问题未检索到相关知识块。"
@@ -205,7 +235,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 "detail": (
                     f"已取得 {knowledge.hit_count} 个相关知识块"
                     if knowledge.enabled
-                    else "Dify Knowledge 当前未启用"
+                    else "企业知识库当前未启用"
                 ),
                 "durationMs": round((time.perf_counter() - retrieval_started) * 1000),
             }
@@ -213,8 +243,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             yield ndjson({"type": "trace", "step": retrieval_step})
 
         platform_data_result = bool(
-            preparation is not None
-            and preparation.intent == "platform_data_query"
+            preparation is not None and preparation.intent == "platform_data_query"
         )
         generation_started = time.perf_counter()
         generation_step: dict[str, object] = {
@@ -223,7 +252,9 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             "status": "running",
             "kind": "tool",
             "toolName": (
-                "platform_data_renderer" if platform_data_result else payload.model_provider
+                "platform_data_renderer"
+                if platform_data_result
+                else payload.model_provider
             ),
             "detail": (
                 "正在把已校验的平台数据渲染为表格"
@@ -332,7 +363,9 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 notification_step = {
                     **notification_step,
                     "status": "completed" if notification_sent else "skipped",
-                    "detail": "通知已发送" if notification_sent else "通知策略未允许自动发送",
+                    "detail": "通知已发送"
+                    if notification_sent
+                    else "通知策略未允许自动发送",
                     "durationMs": round(
                         (time.perf_counter() - notification_started) * 1000
                     ),
@@ -366,7 +399,9 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
                 "enabled": preparation is not None,
                 "intent": preparation.intent if preparation else "direct_chat",
                 "databaseType": payload.database_type,
-                "reportRequired": preparation.plan.report_required if preparation else False,
+                "reportRequired": preparation.plan.report_required
+                if preparation
+                else False,
                 "exportFormats": preparation.plan.export_formats if preparation else [],
                 "notificationSent": notification_sent,
             },
@@ -380,7 +415,7 @@ async def process_events(payload: ProcessRequest) -> AsyncIterator[bytes]:
             len(answer),
         )
         yield ndjson({"type": "complete", "result": result})
-    except (DifyKnowledgeError, LlmProviderError) as error:
+    except (KnowledgeBaseError, LlmProviderError) as error:
         logger.warning(
             "AI dependency request failed: task_id=%s provider=%s error=%s",
             payload.task_id,
@@ -443,3 +478,50 @@ def download_task_artifact(payload: DownloadArtifactRequest) -> Response:
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail="artifact not found") from error
     return Response(content=content, media_type=content_type)
+
+
+@app.post("/knowledge/documents/ingest")
+async def ingest_knowledge_document(
+    payload: KnowledgeIngestRequest,
+) -> dict[str, object]:
+    """仅供 NestJS 内部调用，保存并索引管理员上传的文档。"""
+
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="invalid base64 content") from error
+    try:
+        return await ingest_document(
+            payload.document_id,
+            payload.title,
+            payload.file_name,
+            payload.content_type,
+            payload.visibility,
+            content,
+        )
+    except KnowledgeBaseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.patch("/knowledge/documents/visibility", status_code=status.HTTP_204_NO_CONTENT)
+def patch_knowledge_visibility(payload: KnowledgeMutationRequest) -> Response:
+    """仅供 NestJS 内部调用，更新全部向量分块的 ACL。"""
+
+    if payload.visibility is None:
+        raise HTTPException(status_code=400, detail="visibility is required")
+    try:
+        update_document_visibility(payload.document_id, payload.visibility)
+    except KnowledgeBaseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.delete("/knowledge/documents", status_code=status.HTTP_204_NO_CONTENT)
+def delete_knowledge_document(payload: KnowledgeMutationRequest) -> Response:
+    """仅供 NestJS 内部调用，幂等清理文档向量和原文件。"""
+
+    try:
+        delete_document(payload.document_id, payload.object_key)
+    except KnowledgeBaseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

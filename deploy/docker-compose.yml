@@ -168,7 +168,7 @@ services:
       # PostgreSQL 查询 Tool 复用 Git 外 database.env，不在仓库重复保存密码。
       - ${DATABASE_ENV_FILE:-/etc/enterprise-ai-platform/database.env}
       - ${PLATFORM_ENV_FILE:-/etc/enterprise-ai-platform/platform.env}
-      # 大模型与 Dify Key 只注入 FastAPI，不进入前端、NestJS、Gin 或 Worker。
+      # 大模型与向量模型 Key 只注入 FastAPI，不进入前端、NestJS、Gin 或 Worker。
       - ${LLM_ENV_FILE:-/etc/enterprise-ai-platform/llm.env}
       # DB2 与通知配置允许稍后提供；真实文件位于 Git 仓库之外。
       - path: ${AGENT_ENV_FILE:-/etc/enterprise-ai-platform/agent.env}

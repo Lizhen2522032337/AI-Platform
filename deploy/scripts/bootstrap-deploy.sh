@@ -72,6 +72,13 @@ umask 077
 log "克隆 ${BRANCH} 到 ${DEPLOY_DIR}"
 git clone --branch "${BRANCH}" --single-branch "${REPOSITORY_URL}" "${DEPLOY_DIR}"
 
+# 知识库检索参数不含密钥，首次部署写入仓库外；后续可直接编辑并热生效。
+if [[ ! -e "${CONFIG_DIR}/knowledge-base.json" ]]; then
+    install -m 644 "${DEPLOY_DIR}/deploy/knowledge-base.example.json" \
+        "${CONFIG_DIR}/knowledge-base.json"
+    log "已创建知识库热配置：${CONFIG_DIR}/knowledge-base.json"
+fi
+
 log '固定当前批准的基础镜像 digest'
 bash "${DEPLOY_DIR}/deploy/scripts/pin-base-images.sh"
 

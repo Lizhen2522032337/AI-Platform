@@ -13,6 +13,7 @@ export interface AiTaskMessage {
   modelProvider: 'deepseek' | 'qwen';
   databaseType: 'postgresql' | 'db2';
   allowDynamicSql: boolean;
+  allowAdminKnowledge: boolean;
   conversationId: number | null;
   createdAt: string;
 }

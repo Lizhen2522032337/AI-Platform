@@ -1,4 +1,4 @@
-"""LangGraph Agent 图：分流 → 规划 → Dify取证 → 数据库取证 → 汇总上下文。"""
+"""LangGraph Agent 图：分流 → 规划 → 自建知识库取证 → 数据库取证 → 汇总上下文。"""
 
 import asyncio
 import json
@@ -16,7 +16,7 @@ from app.agent.dynamic_sql_tool import DynamicSqlToolError, execute_dynamic_sql
 from app.agent.planners import choose_intent, create_plan
 from app.agent.types import AgentPlan, AgentState, DatabaseType
 from app.config.settings import get_settings
-from app.dify import DifyKnowledgeError, retrieve_knowledge
+from app.knowledge import KnowledgeBaseError, retrieve_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,9 @@ def supervisor_node(state: AgentState) -> dict[str, object]:
     started = time.perf_counter()
     _emit_trace(state, "supervisor", "分析请求并选择处理路线", "running")
     intent = choose_intent(state["prompt"])
-    logger.info("Agent supervisor routed: task_id=%s intent=%s", state["task_id"], intent)
+    logger.info(
+        "Agent supervisor routed: task_id=%s intent=%s", state["task_id"], intent
+    )
     intent_labels = {
         "incident_analysis": "生产问题分析",
         "report_generation": "报表生成",
@@ -171,16 +173,19 @@ async def knowledge_tool_node(state: AgentState) -> dict[str, object]:
     started = time.perf_counter()
     _emit_trace(
         state,
-        "dify_knowledge",
+        "knowledge_retrieval",
         "检索企业知识库",
         "running",
         kind="tool",
-        tool_name="dify_knowledge",
+        tool_name="knowledge_retrieval",
     )
     try:
-        knowledge = await retrieve_knowledge(plan.knowledge_query)
+        knowledge = await retrieve_knowledge(
+            plan.knowledge_query,
+            allow_admin=state.get("allow_admin_knowledge", False),
+        )
         logger.info(
-            "Agent Dify tool completed: task_id=%s enabled=%s hits=%d",
+            "Agent knowledge tool completed: task_id=%s enabled=%s hits=%d",
             state["task_id"],
             knowledge.enabled,
             knowledge.hit_count,
@@ -189,32 +194,32 @@ async def knowledge_tool_node(state: AgentState) -> dict[str, object]:
         detail = (
             f"已取得 {knowledge.hit_count} 个相关知识块"
             if knowledge.enabled
-            else "Dify Knowledge 当前未启用"
+            else "企业知识库当前未启用"
         )
         _emit_trace(
             state,
-            "dify_knowledge",
+            "knowledge_retrieval",
             "检索企业知识库",
             status,
             detail=detail,
             kind="tool",
-            tool_name="dify_knowledge",
+            tool_name="knowledge_retrieval",
             duration_ms=round((time.perf_counter() - started) * 1000),
         )
         return {
             "knowledge_context": knowledge.context,
             "knowledge_hits": knowledge.hit_count,
         }
-    except DifyKnowledgeError as error:
-        logger.warning("Agent Dify tool failed: task_id=%s", state["task_id"])
+    except KnowledgeBaseError as error:
+        logger.warning("Agent knowledge tool failed: task_id=%s", state["task_id"])
         _emit_trace(
             state,
-            "dify_knowledge",
+            "knowledge_retrieval",
             "检索企业知识库",
             "failed",
             detail=str(error),
             kind="tool",
-            tool_name="dify_knowledge",
+            tool_name="knowledge_retrieval",
             duration_ms=round((time.perf_counter() - started) * 1000),
         )
         return {
@@ -222,7 +227,7 @@ async def knowledge_tool_node(state: AgentState) -> dict[str, object]:
             "knowledge_hits": 0,
             "observations": [
                 {
-                    "tool": "dify_knowledge",
+                    "tool": "knowledge_retrieval",
                     "status": "error",
                     "message": str(error),
                 }
@@ -412,7 +417,7 @@ def context_builder_node(state: AgentState) -> dict[str, object]:
         f"目标：{plan.objective}\n"
         f"候选原因：{json.dumps(plan.hypotheses, ensure_ascii=False)}\n"
         f"输出要求：{report_instruction}\n\n"
-        "[Dify知识库证据]\n"
+        "[企业知识库证据]\n"
         f"{state.get('knowledge_context') or '未取得知识库证据。'}\n\n"
         f"[{state['database_type']}及工具证据]\n"
         f"{evidence or '本次没有执行数据库查询。'}\n\n"
@@ -437,7 +442,7 @@ def build_agent_graph():
     builder.add_node("incident_analysis", incident_planner_node)
     builder.add_node("report_generation", report_planner_node)
     builder.add_node("platform_data_query", platform_data_planner_node)
-    builder.add_node("dify_knowledge_tool", knowledge_tool_node)
+    builder.add_node("knowledge_retrieval_tool", knowledge_tool_node)
     builder.add_node("database_query_tool", database_tool_node)
     builder.add_node("context_builder", context_builder_node)
     builder.add_edge(START, "supervisor")
@@ -450,11 +455,11 @@ def build_agent_graph():
             "platform_data_query": "platform_data_query",
         },
     )
-    builder.add_edge("incident_analysis", "dify_knowledge_tool")
-    builder.add_edge("report_generation", "dify_knowledge_tool")
+    builder.add_edge("incident_analysis", "knowledge_retrieval_tool")
+    builder.add_edge("report_generation", "knowledge_retrieval_tool")
     # 平台用户查询不依赖企业知识库，直接进入受控数据库节点。
     builder.add_edge("platform_data_query", "database_query_tool")
-    builder.add_edge("dify_knowledge_tool", "database_query_tool")
+    builder.add_edge("knowledge_retrieval_tool", "database_query_tool")
     builder.add_edge("database_query_tool", "context_builder")
     builder.add_edge("context_builder", END)
     return builder.compile()
@@ -470,6 +475,7 @@ async def prepare_agent(
     messages: list[dict[str, str]],
     database_type: DatabaseType = "postgresql",
     allow_dynamic_sql: bool = False,
+    allow_admin_knowledge: bool = False,
     trace_callback: TraceCallback | None = None,
 ) -> AgentPreparation:
     """运行取证图；现有 Worker 仍只需调用原来的 FastAPI `/process`。"""
@@ -481,6 +487,7 @@ async def prepare_agent(
             "provider": provider,
             "database_type": database_type,
             "allow_dynamic_sql": allow_dynamic_sql,
+            "allow_admin_knowledge": allow_admin_knowledge,
             "messages": messages,
             "observations": [],
             "trace_callback": trace_callback,

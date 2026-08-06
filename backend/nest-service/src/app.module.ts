@@ -13,6 +13,8 @@ import { AppUser } from './users/user.entity';
 import { UsersModule } from './users/users.module';
 import { ChatConversation } from './conversations/conversation.entity';
 import { ConversationsModule } from './conversations/conversations.module';
+import { KnowledgeDocument } from './knowledge/knowledge-document.entity';
+import { KnowledgeModule } from './knowledge/knowledge.module';
 
 function requiredPassword(): string {
   const password = process.env.POSTGRES_PASSWORD;
@@ -36,7 +38,7 @@ function requiredPassword(): string {
         (process.env.POSTGRES_SSLMODE ?? 'disable') === 'disable'
           ? false
           : { rejectUnauthorized: false },
-      entities: [AiTask, AppUser, Role, Permission, ChatConversation],
+      entities: [AiTask, AppUser, Role, Permission, ChatConversation, KnowledgeDocument],
       synchronize: false,
       retryAttempts: 5,
       retryDelay: 2000,
@@ -46,6 +48,7 @@ function requiredPassword(): string {
     AuthModule,
     TasksModule,
     ConversationsModule,
+    KnowledgeModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
